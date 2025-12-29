@@ -232,8 +232,8 @@ def linfield(*size, device="cpu"):
         _torch.meshgrid(*[_torch.linspace(-1,1,s,device=device) * s / (s+1)
                          for s in reversed(size)], indexing="xy"), -1)
 
-def norm(x, dims=None, eps=1e-8):
-    return x.sub(x.mean(dims,keepdim=True)).div(x.std(dims,keepdim=True) + eps)
+def norm(x, dim=None, eps=1e-8):
+    return x.sub(x.mean(dim,keepdim=True)).div(x.std(dim,keepdim=True) + eps)
 
 def center(x, dims=None):
     return x.sub(x.mean(dims,keepdim=True))

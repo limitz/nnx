@@ -67,9 +67,9 @@ class ModuleFunction(_nn.Module):
         return r
     
 class TensorFunction(_nn.Module):
-    def __init__(self, *args, _override_attr=None, **kwargs):
+    def __init__(self, *args, _attr=None, **kwargs):
         super().__init__()
-        self.attr = _override_attr or type(self).__name__.lower()
+        self.attr = _attr or type(self).__name__.lower()
         self.args = args
         self.kwargs = kwargs
 
@@ -113,24 +113,53 @@ class Squeeze(TensorFunction): ...
 class Unsqueeze(TensorFunction): ...
 class Expand(TensorFunction): ...
 class Contiguous(TensorFunction): ...
+class Clamp(TensorFunction): ...
 class Split(TensorFunction): ...
 class Chunk(TensorFunction): ...
+class MT(TensorFunction):
+    def __init__(self):
+        super().__init__(_attr="mT")
 
 class Cat(ModuleFunction): ...
 class Stack(ModuleFunction): ...
 
-class PadCat(ModuleFunction):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, _module=_Fx, **kwargs)
-
-class PadStack(ModuleFunction):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, _module=_Fx, **kwargs)
+class FxFunction(ModuleFunction):
+    def __init__(self, *args, _attr=None, **kwargs):
+        super().__init__(*args, _module=_Fx, _attr=_attr, **kwargs)
         
-class MT(TensorFunction):
-    def __init__(self):
-        super().__init__(_override_attr="mT")
+class PadCat(FxFunction): ...
+class PadStack(FxFunction): ...
+class VoxelShuffle(FxFunction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(self, *args, _attr="voxel_shuffle", **kwargs)
+class VoxelUnshuffle(FxFunction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(self, *args, _attr="voxel_unshuffle", **kwargs)
+class Norm(FxFunction): ...
+class Center(FxFunction): ...
+class Reduce(FxFunction): ...
 
+class FFTFunction(ModuleFunction):
+    def __init__(self, *args, _attr=None, **kwargs):
+        super().__init__(*args, _module=_torch.fft, _attr=_attr, **kwargs)
+
+class FFT1(FFTFunction): ...
+class FFT2(FFTFunction): ...
+class FFTn(FFTFunction): ...
+class IFFT1(FFTFunction): ...
+class IFFT2(FFTFunction): ...
+class IFFTn(FFTFunction): ...
+
+class ForEach(_nn.Sequential):
+    def forward(self, x):
+        s = super()
+        r = [s.forward(v) for v in x]
+        if isinstance(x, _torch.Tensor):
+            if len(r):
+                s = r[0].shape
+                if all(v.shape == s for v in s[1:]):
+                    return torch.stack(r)
+        return r
 class Tee(_nn.Sequential):
     def forward(self, x):
         super().forward(x)
