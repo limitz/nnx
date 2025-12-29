@@ -35,6 +35,51 @@ class StaticConv3d(StaticConvNd):
     def __init__(self, *args, **kwargs):
         super().__init__(3, *args, **kwargs)
 
+class Skip(_nn.Sequential):
+    def forward(self,x):
+        return x + super().forward(x)
+
+class TensorFunction(_nn.Module):
+    def __init__(self, *args, _override_attr=None, **kwargs):
+        super().__init__()
+        self.attr = _override_attr or type(self).__name__.lower()
+        self.args = args
+        self.kwargs = kwargs
+
+    def forward(self, x):
+        attr = getattr(x, self.attr)
+        if callable(attr):
+            return attr(*self.args, **self.kwargs)
+        else:
+            return attr
+            
+    def extra_repr(self):
+        r = ""
+        if len(self.args):
+            r += ", ".join([str(v) for v in self.args])
+        if len(self.kwargs):
+            if len(r): r += ", "
+            r += ", ".join([str(k) + "=" + str(v) for k,v in self.kwargs.items()])
+        return r
+    
+class Permute(TensorFunction): ...
+class Transpose(TensorFunction): ...
+class View(TensorFunction): ...
+class Reshape(TensorFunction): ...
+class Abs(TensorFunction): ...
+class Neg(TensorFunction): ...
+class Real(TensorFunction): ...
+class Imag(TensorFunction): ...
+class Angle(TensorFunction): ...
+class Sum(TensorFunction): ...
+class Mean(TensorFunction): ...
+class Std(TensorFunction): ...
+class Prod(TensorFunction): ...
+    
+class MT(TensorFunction):
+    def __init__(self):
+        super().__init__(_override_attr="mT")
+
 class CompoundLoss(_nn.ModuleList):
     def __init__(self, losses, strict=True):
         assert isinstance(losses, (dict, list, tuple)), "invalid argument"
