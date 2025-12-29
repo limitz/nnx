@@ -5,6 +5,7 @@ import torch.nn.functional as _F
 import torchvision as _torchvision
 import numpy as _np
 import collections as _collections
+from . import functional as _Fx
 
 class StaticConvNd(_nn.Module):
     def __init__(self, n, weight, bias=None, **kwargs):
@@ -39,6 +40,32 @@ class Skip(_nn.Sequential):
     def forward(self,x):
         return x + super().forward(x)
 
+class ModuleFunction(_nn.Module):
+    def __init__(self, *args, _module=_torch, _attr=None, _dereference=False, **kwargs):
+        super().__init__()
+        if _attr is None:
+            _attr = type(self).__name__.lower()
+        
+        self.function = getattr(_module, _attr)
+        self.dereference = _dereference
+        self.args = args
+        self.kwargs = kwargs
+
+    def forward(self, x):
+        if self.dereference:
+            return self.function(*x, *self.args, **self.kwargs)
+        else:
+            return self.function(x, *self.args, **self.kwargs)
+    
+    def extra_repr(self):
+        r = ""
+        if len(self.args):
+            r += ", ".join([str(v) for v in self.args])
+        if len(self.kwargs):
+            if len(r): r += ", "
+            r += ", ".join([str(k) + "=" + str(v) for k,v in self.kwargs.items()])
+        return r
+    
 class TensorFunction(_nn.Module):
     def __init__(self, *args, _override_attr=None, **kwargs):
         super().__init__()
@@ -68,6 +95,7 @@ class View(TensorFunction): ...
 class Reshape(TensorFunction): ...
 class Abs(TensorFunction): ...
 class Neg(TensorFunction): ...
+class Conj(TensorFunction): ...
 class Real(TensorFunction): ...
 class Imag(TensorFunction): ...
 class Angle(TensorFunction): ...
@@ -75,10 +103,67 @@ class Sum(TensorFunction): ...
 class Mean(TensorFunction): ...
 class Std(TensorFunction): ...
 class Prod(TensorFunction): ...
-    
+class To(TensorFunction): ...
+class Detach(TensorFunction): ...
+class Log(TensorFunction): ...
+class Exp(TensorFunction): ...
+class Pow(TensorFunction): ...
+class Sqrt(TensorFunction): ...
+class Squeeze(TensorFunction): ...
+class Unsqueeze(TensorFunction): ...
+class Expand(TensorFunction): ...
+class Contiguous(TensorFunction): ...
+class Split(TensorFunction): ...
+class Chunk(TensorFunction): ...
+
+class Cat(ModuleFunction): ...
+class Stack(ModuleFunction): ...
+
+class PadCat(ModuleFunction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, _module=_Fx, **kwargs)
+
+class PadStack(ModuleFunction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, _module=_Fx, **kwargs)
+        
 class MT(TensorFunction):
     def __init__(self):
         super().__init__(_override_attr="mT")
+
+class Tee(_nn.Sequential):
+    def forward(self, x):
+        super().forward(x)
+        return x
+
+class Ignore(_nn.Sequential):
+    def forward(self, x):
+        return x
+
+class ResizedLike(_nn.Sequential):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args)
+        self.kwargs = kwargs
+        
+    def forward(self, x, **kwargs):
+        s = x.shape[2:]
+        return _Fx.interpolate(super().forward(x), s, **self.kwargs)
+
+class RandnLike(_nn.Module):
+    def forward(self, x, **kwargs):
+        return _torch.randn_like(x)
+
+class RandLike(_nn.Module):
+    def forward(self, x, **kwargs):
+        return _torch.rand_like(x)
+
+class OnesLike(_nn.Module):
+    def forward(self, x, **kwargs):
+        return _torch.ones_like(x)
+
+class ZerosLike(_nn.Module):
+    def forward(self, x, **kwargs):
+        return _torch.zeros_like(x)
 
 class CompoundLoss(_nn.ModuleList):
     def __init__(self, losses, strict=True):
