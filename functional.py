@@ -235,8 +235,8 @@ def linfield(*size, device="cpu"):
 def norm(x, dim=None, eps=1e-8):
     return x.sub(x.mean(dim,keepdim=True)).div(x.std(dim,keepdim=True) + eps)
 
-def center(x, dims=None):
-    return x.sub(x.mean(dims,keepdim=True))
+def center(x, dim=None):
+    return x.sub(x.mean(dim,keepdim=True))
 
 def n_between(a,b,n=(),inclusive=True):
     if isinstance(a, float) or isinstance(b, float):
