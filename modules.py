@@ -206,7 +206,7 @@ class Loop(_nn.Sequential):
         
 
 class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
-    def __init__(self, num_classes, betas=(0.9, 0.995, 0.99), *args, **kwargs):
+    def __init__(self, num_classes, betas=(0.9, 0.999, 0.99), *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.betas = betas
         self.num_classes = num_classes
@@ -227,7 +227,7 @@ class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
                 # update the scores
                 total = _torch.bincount(target, minlength=n)
                 #correct = _torch.bincount(target[correct], minlength=n)
-                correct = pred.softmax(-1) * F.one_hot(target,n)
+                correct = pred.softmax(-1) * _F.one_hot(target,n)
                 correct = correct.sum(0)
                 classes = total.nonzero().view(-1)
                 scores = self.scores.mul(self.betas[0])
