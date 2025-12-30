@@ -187,20 +187,40 @@ def masks_to_thetas(masks, margin=0.1):
         batch_thetas.append(thetas)
     return _torch.stack(batch_thetas).squeeze(-3)
 
-def logits_to_thetas( ps, q=0):
-        scale,ratio,angle,distort,tx,ty = ps.split([1,1,1,4,1,1],-1)
-        tx,ty = tx, ty
-        scale = scale.exp()
-        ratio = ratio.exp()
-        dx,dy,sx,sy = distort.mul(q).split(1,-1)
-        sx,sy = sx*0.1, sy*0.1
-        angle = angle.mul(_math.pi)
-        theta = _torch.cat([
-            scale * angle.cos() + sx * sy, ratio * -scale * angle.sin() + sy, tx,
-            scale * angle.sin() + sx, ratio * scale * angle.cos(), ty,
-            dx, dy, _torch.ones_like(scale)], -1).unflatten(-1,(3,3))
-        return theta
+def logits_to_thetas_2d( ps, q=0):
+    scale,ratio,angle,distort,tx,ty = ps.split([1,1,1,4,1,1],-1)
+    tx,ty = tx, ty
+    scale = scale.exp()
+    ratio = ratio.exp()
+    dx,dy,sx,sy = distort.mul(q).split(1,-1)
+    sx,sy = sx*0.1, sy*0.1
+    angle = angle.mul(_math.pi)
+    theta = _torch.cat([
+        scale * angle.cos() + sx * sy, ratio * -scale * angle.sin() + sy, tx,
+        scale * angle.sin() + sx, ratio * scale * angle.cos(), ty,
+        dx, dy, _torch.ones_like(scale)], -1).unflatten(-1,(3,3))
+    return theta
 
+logits_to_thetas = logits_to_thetas_2d
+
+def logits_to_thetas_3d( ps, q=0):
+    scale,ratio,angle,distort,t = ps.split([1,2,3,12,3],-1)
+    scale = scale.exp()
+    ratio = ratio.exp()
+    scale = torch.cat([scale,scale*ratio[...,[0]],scale*ratio[...,[1]]],-1)
+    ratio = torch.ones_like(scale)
+    dx,dy,sx,sy = distort.mul(q).split(3,-1)
+    sx,sy = sx*0.1, sy*0.1
+    angle = angle.mul(_math.pi)
+    translate = torch.zeros_like(scale)
+    tt = torch.stack([scale, ratio, dx, dy, sx,sy, angle])
+    ...
+    assert False
+    theta = _torch.cat([
+        scale * angle.cos() + sx * sy, ratio * -scale * angle.sin() + sy, tx,
+        scale * angle.sin() + sx, ratio * scale * angle.cos(), ty,
+        dx, dy, _torch.ones_like(scale)], -1).unflatten(-1,(3,3))
+    return theta
 
 def thetas_to_xywh(theta, image_size):
     assert theta.dim() in { 3, 4 }
@@ -513,3 +533,109 @@ class ShearingLoss(_nn.Module):
         r = (x * y).sum(-1)
         r = r.abs().pow(self.gamma)
         return _Fx.reduce(r, self.reduction)
+
+
+def random_flow_field_3d(nps=((3,5),(4,6),(9,14)), strengths=(1e-1, 4e-2, 1e-2), size=(32,32,32), no_field=False, iterations=2, device="cpu", affine=0, window_mode="cos+prod+global"):
+    if not isinstance(nps, (list, tuple)): nps = [nps]
+    if not isinstance(strengths, (list, tuple)): strengths = [strengths]
+    assert len(nps) == len(strengths)
+    field = linfield(size, device=device).permute(3,0,1,2)
+    w1 = window(*size, mode=window_mode, device=device)
+    w2 = window(*size, mode=window_mode.replace("prod",""), device=device)
+    
+    for i in range(iterations):
+        subfield = linfield(size, device=device).permute(3,0,1,2)
+        for np, strength in zip(nps, strengths):
+            if isinstance(np, tuple):
+                np = _torch.randint(np[1]-np[0], (3,))+np[0]
+                np = [n.item() for n in np]
+            else:
+                np = (np,np,np)
+            ptss = _torch.randn(3, np[0],np[1],np[2], device=device)*strength
+            for j in range(3):
+                fs = []
+                for pts in ptss.split(1,1):
+                    f = _F.interpolate(pts, (pts.shape[-2],size[-j]), mode="bicubic")
+                    f = _torch.nan_to_num(f)
+                    fs.append(f[:,0])
+                ptss = _torch.stack(fs,-1)
+            subfield += ptss * w1
+        #subfield = subfield 
+        field = _F.grid_sample(field[None], subfield.permute(1,2,3,0)[None], 
+                                   align_corners=True, mode="bilinear",
+                                   padding_mode="border")[0]
+        
+        if affine > 0:
+            field = field.permute(1,2,3,0)
+            s = affine #strengths[0] if "global" in window_mode else 0.2
+            rotate = (_torch.randn(3) * math.pi) * s
+            vect = rotate.sin().abs() + rotate.cos().abs()
+            translate = _torch.randn(3) * s
+            scale = _torch.ones(3)#.mul(vect)
+            affines = _torch.tensor([
+                [
+                    [math.cos(rotate[0]), math.sin(rotate[0]), 0, 0],
+                    [-math.sin(rotate[0]), math.cos(rotate[0]), 0, 0],
+                    [0,0,1,0], 
+                    [0,0,0,1]
+                ],
+                [
+                    [math.cos(rotate[1]), 0, math.sin(rotate[1]), 0],
+                    [0,1,0,0], 
+                    [-math.sin(rotate[1]), 0, math.cos(rotate[1]),  0],
+                    [0,0,0,1]
+                ],
+                [
+                    [1,0,0,0], 
+                    [0,math.cos(rotate[2]), math.sin(rotate[2]),  0],
+                    [0,-math.sin(rotate[2]), math.cos(rotate[2]), 0],
+                    [0,0,0,1]
+                ],
+                [
+                    [scale[0],0,0, translate[0]],
+                    [0,scale[1],0, translate[1]],
+                    [0,0,scale[2], translate[2]],
+                    [0,0,0,1]
+                ],
+            ], device=device)
+            a = affines[0] @ affines[1] @ affines[2] @ affines[3]
+            field = _F.pad(field, (0,1), "constant", 1) @ a.mT
+            field = field[...,:3]
+            #field = field.squeeze(-2) 
+        
+            field = field - linfield(size, device=device)
+            if "iter" in window_mode and i < iterations-1:
+                field = field * w1.permute(1,2,3,0)
+            field = field + linfield(size, device=device)
+            field = field.permute(-1,0,1,2)
+
+    field = field.permute(1,2,3,0)
+    #field = field.permute(1,2,3,0)
+    if True and affine:
+        #s = 1
+        rotate = (_torch.rand(1).sub(0.5) * math.pi/2)
+        s = 1 #(rotate.sin().abs() + rotate.cos().abs())
+        
+        affines = _torch.tensor([
+             [
+                    [s,0,0,0], 
+                    [0,math.cos(rotate[0])*s, math.sin(rotate[0])*s,  0],
+                    [0,-math.sin(rotate[0])*s, math.cos(rotate[0])*s, 0],
+                    [0,0,0,1]
+                ],
+                
+        ], device=device)
+        a = affines[0]# @ affines[1] @ affines[2] @ affines[3]
+        field = _F.pad(field, (0,1), "constant", 1) @ a.mT
+        field = field[...,:3]
+        #field = field.squeeze(-2) 
+    
+    field = field - linfield(size, device=device)
+    if "global" in window_mode:
+        field = field * w2.permute(1,2,3,0)
+    field = field + linfield(size, device=device)
+    
+    
+    if no_field:
+        field = field - linfield(size, device=device)
+    return field
