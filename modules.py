@@ -194,28 +194,41 @@ class ZerosLike(_nn.Module):
     def forward(self, x, **kwargs):
         return _torch.zeros_like(x)
 
-class AdaptiveCrossEntropyLoss(nn.CrossEntropyLoss):
-    def __init__(self, num_classes, betas=(0.9, 0.99), *args, **kwargs):
+class Loop(_nn.Sequential):
+    def __init__(self, *args, n=0):
+        super().__init__(*args)
+        self.n = n
+    
+    def forward(self, x):
+        for _ in range(self.n):    
+            x = super().forward(x)
+        return x
+        
+
+class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
+    def __init__(self, num_classes, betas=(0.9, 0.995, 0.99), *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.betas = betas
         self.num_classes = num_classes
-        self.register_buffer("scores", torch.ones(num_classes))
+        self.register_buffer("scores", _torch.ones(num_classes))
         if self.weight is None:
-            self.register_buffer("weight", torch.ones(num_classes))
+            self.register_buffer("weight", _torch.ones(num_classes))
         
     def reset(self):
-        with torch.no_grad():
-            self.scores.copy_(torch.ones_like(self.scores))
+        with _torch.no_grad():
+            self.scores.copy_(_torch.ones_like(self.scores))
         
     def forward(self, pred, target):
-        if torch.is_grad_enabled():
-            with torch.no_grad():
+        if _torch.is_grad_enabled():
+            with _torch.no_grad():
                 correct = pred.argmax(-1) == target
                 n = self.num_classes
                 
                 # update the scores
-                total = torch.bincount(target, minlength=n)
-                correct = torch.bincount(target[correct], minlength=n)
+                total = _torch.bincount(target, minlength=n)
+                #correct = _torch.bincount(target[correct], minlength=n)
+                correct = pred.softmax(-1) * F.one_hot(target,n)
+                correct = correct.sum(0)
                 classes = total.nonzero().view(-1)
                 scores = self.scores.mul(self.betas[0])
                 scores = scores + (correct/total).mul(1-self.betas[0])
@@ -224,12 +237,11 @@ class AdaptiveCrossEntropyLoss(nn.CrossEntropyLoss):
 
                 #update the weights
                 weight = self.scores.sum() / (self.num_classes * self.scores)
-                weight = self.weight.log() * self.betas[1] + weight.log() * (1-self.betas[1])
+                weight = self.weight.log() * self.betas[1] + weight.log() * (1-self.betas[2])
                 weight = weight.exp()
                 self.weight.copy_(weight)
             
         return super().forward(pred, target)
-
 
 class CompoundLoss(_nn.ModuleList):
     def __init__(self, losses, strict=True):
