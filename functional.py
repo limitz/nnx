@@ -38,6 +38,18 @@ def tensor(x, shape=None, device=None, dtype=None):
         x = x.to(dtype)
     return x
 
+def crop_view(input, box):
+    x,y,w,h = box
+    if isinstance(x,float): x = int(x * input.shape[-1])
+    if isinstance(y,float): y = int(y * input.shape[-2])
+    if isinstance(w,float): w = int(w * input.shape[-1])
+    if isinstance(h,float): h = int(h * input.shape[-2])
+    x0 = min(max(0,x), input.shape[-1])
+    y0 = min(max(0,y), input.shape[-2])
+    x1 = min(max(0,x+w), input.shape[-1])
+    y1 = min(max(0,y+h), input.shape[-2])
+    return input[...,y0:y1,x0:x1]
+    
 def pad_to(input, size, mode="center", *args, **kwargs):
     if isinstance(input, (list, tuple)):
         return _torch.stack([pad_to(v, size, mode, *args, **kwargs) for v in input])
