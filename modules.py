@@ -41,22 +41,27 @@ class Skip(_nn.Sequential):
         return x + super().forward(x)
 
 class ModuleFunction(_nn.Module):
-    def __init__(self, *args, _module=_torch, _attr=None, _dereference=False, **kwargs):
+    def __init__(self, *args, _module=_torch, _attr=None, _dereference=False, _postprocess=None,
+                 **kwargs):
         super().__init__()
         if _attr is None:
             _attr = type(self).__name__.lower()
         
         self.function = getattr(_module, _attr)
         self.dereference = _dereference
+        self.postprocess = _postprocess
         self.args = args
         self.kwargs = kwargs
 
     def forward(self, x):
         if self.dereference:
-            return self.function(*x, *self.args, **self.kwargs)
+            r = self.function(*x, *self.args, **self.kwargs)
         else:
-            return self.function(x, *self.args, **self.kwargs)
-    
+            r = self.function(x, *self.args, **self.kwargs)
+        if self.postprocess is not None and callable(self.postprocess):
+            r = self.postprocess(r)
+        return r
+        
     def extra_repr(self):
         r = ""
         if len(self.args):
@@ -67,18 +72,23 @@ class ModuleFunction(_nn.Module):
         return r
     
 class TensorFunction(_nn.Module):
-    def __init__(self, *args, _attr=None, **kwargs):
+    def __init__(self, *args, _attr=None, _postprocess=None, **kwargs):
         super().__init__()
         self.attr = _attr or type(self).__name__.lower()
+        self.postprocess = _postprocess
         self.args = args
         self.kwargs = kwargs
 
     def forward(self, x):
         attr = getattr(x, self.attr)
+        
         if callable(attr):
-            return attr(*self.args, **self.kwargs)
+            r = attr(*self.args, **self.kwargs)
         else:
-            return attr
+            r = attr
+        if self.postprocess is not None and callable(self.postprocess):
+            r = self.postprocess(r)
+        return r
             
     def extra_repr(self):
         r = ""
@@ -116,6 +126,12 @@ class Contiguous(TensorFunction): ...
 class Clamp(TensorFunction): ...
 class Split(TensorFunction): ...
 class Chunk(TensorFunction): ...
+class Max(TensorFunction): 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, _postprocess=lambda x: x[0], **kwargs)
+class Min(TensorFunction): 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, _postprocess=lambda x: x[0], **kwargs)
 class MT(TensorFunction):
     def __init__(self):
         super().__init__(_attr="mT")

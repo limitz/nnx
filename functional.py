@@ -587,6 +587,39 @@ def distance_to_mask(pt, masks):
     assert not _torch.isnan(r).any()
     return r
 
+def coords_to_positions(coords, shapes, ranges=None, indexing="xy"):
+    
+    shapes = tensor(shapes)
+    coords = tensor(coords)
+    if indexing == "xy":
+        shapes = shapes.flip(-1)
+        
+    if shapes.dim() > 1:
+        assert coords.shape[0] == shapes.shape[0]
+        return _torch.stack([coords_to_positions(c,s,ranges)
+                            for c,s in zip(coords, shapes)])
+    if coords.dtype in { _torch.float, _torch.double }:
+        if ranges is None: ranges = (0,1)
+        ranges = tensor(ranges)
+        ranges = ranges.expand(*shapes.shape, 2)
+        b = ranges[...,:1]
+        a = ranges[...,1:] - b
+        assert coords.shape[-1] == shapes.shape[-1]
+        return (((coords-b)/a) * shapes).long()
+    elif coords.dtype in { _torch.cfloat, _torch.cdouble }:
+        assert shapes.shape[-1] == 2
+        if ranges is None: ranges = (-1,1)
+        ranges = tensor(ranges)
+        ranges = ranges.expand(*shapes.shape, 2)
+        b = ranges[...,:1]
+        a = ranges[...,1:] - b
+        coords = _torch.view_as_real(coords)
+        return (((coords-b)/a) * shapes).long()
+    elif coords.dtype in { _torch.long }:
+        return coords
+    else:
+        assert False, "invalid dtype"        
+    
 def voxel_unshuffle(x, kernel_size):
     s = x.shape
     x = x.view(-1, kernel_size, *s[-2:])  # [N...] * Z//k, k, H, W
