@@ -140,10 +140,11 @@ def gaussian_splat_3d(thetas, size, weights=None, sigma=1, reduction="none"):
     p,n,*_ = thetas.shape
     pt = _torch.stack(
         _torch.meshgrid(
-            _torch.linspace(-1,1,w),
             _torch.linspace(-1,1,h),
             _torch.linspace(-1,1,d),
+            _torch.linspace(-1,1,w),
             indexing="xy"),-1).to(thetas.device)
+    #print(pt.shape)
     fields = _F.pad(pt, (0,1), "constant", 1).expand(p, n, -1, -1, -1, -1)
     fields = fields.unsqueeze(-2)
     fields = fields @ thetas[...,None,None,None,:,:].inverse().mT
@@ -205,21 +206,27 @@ logits_to_thetas = logits_to_thetas_2d
 
 def logits_to_thetas_3d( ps, q=0):
     scale,ratio,angle,distort,t = ps.split([1,2,3,12,3],-1)
-    scale = scale.exp()
-    ratio = ratio.exp()
-    scale = torch.cat([scale,scale*ratio[...,[0]],scale*ratio[...,[1]]],-1)
-    ratio = torch.ones_like(scale)
-    dx,dy,sx,sy = distort.mul(q).split(3,-1)
-    sx,sy = sx*0.1, sy*0.1
-    angle = angle.mul(_math.pi)
-    translate = torch.zeros_like(scale)
-    tt = torch.stack([scale, ratio, dx, dy, sx,sy, angle])
-    ...
-    assert False
+    scale = _torch.cat([scale,scale+ratio[...,[0]],scale+ratio[...,[1]]],-1)
+    ratio = _torch.zeros_like(scale)
+    dx,dy,sx,sy = distort.split(3,-1)
+    tt = _torch.zeros_like(scale)#t.unsqueeze(-2) * _torch.eye(3,device=t.device)
+    ms = _torch.stack([scale, ratio, angle, dx, dy, sx, sy, tt, tt], -1)
+    x,y,z = logits_to_thetas_2d(ms).unbind(-3)
+    insert_row = lambda m, i: _torch.cat([m[...,:i,:], 
+                                        _torch.zeros_like(m[...,[0],:]),
+                                        m[...,i:,:]],-2)
+    insert_col = lambda m, i: _torch.cat([m[...,:i], 
+                                        _torch.zeros_like(m[...,[0]]),
+                                        m[...,i:]],-1)                                                     
+    insert = lambda m, i: insert_row(insert_col(m,i),i)
+    x = insert(x,2) + _torch.tensor([[0,0,0,0],[0,0,0,0],[0,0,1,0],[0,0,0,0.]], device=x.device)
+    y = insert(y,1) + _torch.tensor([[0,0,0,0],[0,1,0,0],[0,0,0,0],[0,0,0,0.]], device=y.device)
+    z = insert(z,0) + _torch.tensor([[1,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0.]], device=z.device)
+    theta = x @ y @ z
     theta = _torch.cat([
-        scale * angle.cos() + sx * sy, ratio * -scale * angle.sin() + sy, tx,
-        scale * angle.sin() + sx, ratio * scale * angle.cos(), ty,
-        dx, dy, _torch.ones_like(scale)], -1).unflatten(-1,(3,3))
+        _torch.cat([theta[...,:-1,:-1], t.unsqueeze(-1)], -1),
+        theta[...,-1:,:]], -2)
+    
     return theta
 
 def thetas_to_xywh(theta, image_size):
@@ -497,6 +504,51 @@ def unproject_patches(patches, thetas, weights=None, size=None, mode="bilinear",
     else:
         return projections[0]
 
+def matrix_remove_col(m, i):
+    return _torch.cat([
+        m[...,:i],
+        m[...,i+1:]],-1)
+
+def matrix_insert_col(m, i, eye=False):
+    if eye: 
+        insert = torch.arange(m.shape[-2],device=m.device)
+        insert = insert.eq(i).to(m.dtype)
+        insert = insert.unsqueeze(-1)
+        insert = insert.expand_as(m[...,[0]])
+    else: 
+        insert = torch.zeros_like(m[...,[0]], device=m.device)
+    return _torch.cat([
+        m[...,:i],
+        insert,
+        m[...,i:]],-1)
+    
+def matrix_remove_row(m, i):
+    return _torch.cat([
+        m[...,:i,:],
+        m[...,i+1:,:]],-2)
+    
+def matrix_insert_row(m, i, eye=False):
+    if eye: 
+        insert = torch.arange(m.shape[-1],device=m.device)
+        insert = insert.eq(i).to(m.dtype)
+        insert = insert.unsqueeze(-2)
+        insert = insert.expand_as(m[...,[0],:])
+    else: 
+        insert = torch.zeros_like(m[...,[0],:], device=m.device)
+    return _torch.cat([
+        m[...,:i,:],
+        insert,
+        m[...,i:,:]],-2)
+
+def matrix_remove_dim(m, i):
+    m = matrix_remove_row(m,i)
+    m = matrix_remove_col(m,i)
+    return m
+
+def matrix_insert_dim(m, i):
+    m = matrix_insert_col(m,i,eye=False)
+    m = matrix_insert_row(m,i,eye=True)
+    return m
 
 class TranslationLoss(_nn.Module):
     def __init__(self, gamma=12, reduction="mean"):
@@ -505,7 +557,7 @@ class TranslationLoss(_nn.Module):
         self.reduction = reduction
 
     def forward(self, pred, target=None):
-        pos = pred[...,:2,2]
+        pos = pred[...,:-1,-1]
         r = pos.abs().pow(self.gamma).sum(-1,keepdim=True)
         return _Fx.reduce(r, self.reduction)
 
@@ -516,10 +568,15 @@ class RatioLoss(_nn.Module):
         self.reduction = reduction
 
     def forward(self, pred, target=None):
-        x = pred[...,1].pow(2).sum(-1).sqrt() 
-        y = pred[...,0].pow(2).sum(-1).sqrt()
-        r = (x/y).log().abs().pow(self.gamma)
-        return _Fx.reduce(r, self.reduction)
+        if pred.shape[-1] > 3:
+            a = self.forward(matrix_remove_dim(pred, 0))
+            b = self.forward(matrix_remove_dim(pred, 1))
+            return a+b       
+        else:
+            x = pred[...,1].pow(2).sum(-1).sqrt() 
+            y = pred[...,0].pow(2).sum(-1).sqrt()
+            r = (x/y).log().abs().pow(self.gamma)
+            return _Fx.reduce(r, self.reduction)
 
 class ShearingLoss(_nn.Module):
     def __init__(self, gamma=2, reduction="mean"):
@@ -528,11 +585,16 @@ class ShearingLoss(_nn.Module):
         self.reduction = reduction
 
     def forward(self, pred, target=None):
-        x = pred[...,1]
-        y = pred[...,0]
-        r = (x * y).sum(-1)
-        r = r.abs().pow(self.gamma)
-        return _Fx.reduce(r, self.reduction)
+        if pred.shape[-1] > 3:
+            a = self.forward(matrix_remove_dim(pred, 0))
+            b = self.forward(matrix_remove_dim(pred, 1))
+            return a+b       
+        else:
+            x = pred[...,1]
+            y = pred[...,0]
+            r = (x * y).sum(-1)
+            r = r.abs().pow(self.gamma)
+            return _Fx.reduce(r, self.reduction)
 
 
 def random_flow_field_3d(nps=((3,5),(4,6),(9,14)), strengths=(1e-1, 4e-2, 1e-2), size=(32,32,32), no_field=False, iterations=2, device="cpu", affine=0, window_mode="cos+prod+global"):

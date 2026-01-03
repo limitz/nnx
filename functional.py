@@ -145,7 +145,7 @@ def interpolate(input, size=None, scale_factor=None, mode="nearest"):
         for i in range(3):
             x = interpolate(x, (x.shape[-2],size[-i]), mode="bicubic")
             x = x.permute(0,2,3,1).contiguous()
-        return xs.view(*s[:-3], *size)
+        return x.view(*s[:-3], *size)
     elif input.dtype in { _torch.cfloat, _torch.cdouble }:
         return _torch.complex(
             interpolate(input.real, size, scale_factor, mode),
