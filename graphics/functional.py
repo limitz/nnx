@@ -36,7 +36,7 @@ def highlight(x, mask, color, threshold=0.5, alpha=0.5, background_alpha=1, edge
     color = _Fx.tensor(color,device=x.device)
     if color.dim() == 0: color = color.view(-1)
     if color.dim() == 1: color = color.unflatten(-1,(-1,1,1))
-    if color.dim() == 3: color = color.expand(3,1,1)
+    #if color.dim() == 3: color = color.expand(3,1,1)
     x = _torch.where(mask.gt(threshold).expand_as(x), x * (1-alpha) + color * alpha,x * background_alpha)
     r = _torch.where(edge.expand_as(x), color.expand_as(x), x)
     return r

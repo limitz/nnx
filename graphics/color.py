@@ -41,16 +41,22 @@ def yuv_to_rgb(yuv, clamp=True):
     rgb = (yuv.transpose(-3,-1) @ m.mT).transpose(-3,-1).contiguous()
     return rgb.clamp(0,1) if clamp else rgb
 
-def feature_to_yuv(v, normalize=True):
+def feature_to_yuv(v, norm="center", scale=None, rotations=1):
     c = v.shape[-3]
+    scale = scale or 0.6
     z = _torch.polar(
         _torch.ones(c), 
-        _torch.linspace(0, 2*_math.pi, c))
+        _torch.linspace(0, rotations*2*_math.pi, c))
     v = (v * z.to(v.device).view(-1,1,1)).sum(-3)
-    if normalize:
+    if norm == "center":
+        v = v.div(v.std().add(1e-8))/2
+    elif norm == "std_mean":
         v = v.sub(v.mean()).div(v.std().add(1e-8))/2
-    a = v.abs()
-    v = _torch.stack((a*0.7, v.real, v.imag), -3)
+
+    v = v * scale
+    v = v.tanh()
+    a = v.abs() 
+    v = _torch.stack((a, v.real, v.imag), -3)
     return v
     
 def feature_to_rgb(v, **kwargs):
