@@ -9,12 +9,8 @@ import tempfile as _tempfile
 import uuid as _uuid
 import os as _os
 import time as _time
-from .font import *
+from .text import *
 from .color import *
 from .video import *
 from .image import *
 from .functional import *
-
-def blend(dst, src, position, mode="bilinear", **kwargs):
-    dst = dst.clone()
-    return dst 

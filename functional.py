@@ -519,7 +519,7 @@ def gaussian(size, position=0, *, sigma=1, dims=None, reduction="prod", **kwargs
     args = [gaussian_at(ks, p, s) for ks,p,s in zip(size, position, sigma)]
     mesh = _torch.meshgrid(*args, indexing="ij")
     r = _torch.stack(mesh)
-    return reduce(r, 0, reduction)
+    return reduce(r,reduction, dim=0)
 
 def window(size, type="gaussian", pow=1, **kwargs):
     if type in {"gaussian"}: r = gaussian(size, **kwargs)
@@ -539,7 +539,7 @@ def window(size, type="gaussian", pow=1, **kwargs):
             r = r.pow(2).sum(0, keepdim=True).sqrt().lt(1).float()
         elif type in {"cone", "conical"}:
             r = r.pow(2).prod(0,keepdim=True).sqrt().lt(1).float()
-        r = reduce(r, 0, **kwargs)
+        r = reduce(r, dim=0, **kwargs)
     r = r.pow(pow)
     r = _torch.nan_to_num(r)
     return r

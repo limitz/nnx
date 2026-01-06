@@ -122,6 +122,62 @@ DEFAULT_12X6 = {
 
 DEFAULT = DEFAULT_12X6
 
+def wrap_text(text, wrap_or_size=None, font=DEFAULT,  
+              spacing=0, padding=0):
+    if isinstance(wrap_or_size, (tuple, list, _torch.Size, _torch.Tensor)):
+        size = wrap_or_size
+        wrap = None
+    else:
+        size = None
+        wrap = wrap_or_size
+    if not isinstance(spacing, (list, tuple)):
+        spacing = [spacing] * 2
+    if not isinstance(padding, (list, tuple)):
+        padding = [padding] * 4
+    if len(padding) == 2:
+        padding = [padding[0],padding[0],padding[1],padding[1]]
+    assert len(padding) == 4
+
+    if size is not None:
+        width_of_char = len(DEFAULT[" "][0]) + spacing[0]
+        width_available = size[0] - (padding[0] + padding[1]) + spacing[0] 
+        max_chars_per_line = width_available // width_of_char
+    elif wrap is not None:
+        max_chars_per_line = wrap
+    else:
+        max_chars_per_line = 1<<32
+    
+    lines = text.strip().split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i] 
+        if len(line) > max_chars_per_line:
+            lines.insert(i+1,"")
+        while len(line) > max_chars_per_line:
+            line, word = line.rsplit(" ", 1)
+            word = word.strip()
+            if len(word) == 0: continue
+            if len(lines[i+1]) == 0: lines[i+1] = word
+            else: lines[i+1] = word + " " + lines[i+1]
+        lines[i] = line
+        i += 1
+    return lines
+
+def render_text_to(dst, text, font=DEFAULT, spacing=0, padding=1, 
+                   device="cpu", **kwargs):
+    
+    if not isinstance(spacing, (list, tuple)):
+        spacing = [spacing] * 2
+    if not isinstance(padding, (list, tuple)):
+        padding = [padding] * 4
+    if len(padding) == 2:
+        padding = [padding[0],padding[0],padding[1],padding[1]]
+    assert len(padding) == 4
+
+    lines = wrap_text(text, dst.shape[-2:], spacing=spacing, padding=padding)
+    ...
+    assert False
+    
 def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=80, 
                 device="cpu", **kwargs):
     if not isinstance(spacing, (list, tuple)):

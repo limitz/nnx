@@ -132,6 +132,7 @@ def gaussian_splat_2d(thetas, size, weights=None, sigma=1, reduction="none"):
     fields = fields.squeeze(-2)
     r = fields.pow(2).mul(-2*sigma).exp().prod(-1)
     if weights is not None:
+        #print(r.shape, weights.shape)
         r = r * weights
     return _Fx.reduce(r, reduction, dim=0)
     
@@ -450,8 +451,15 @@ def project_patches(x, thetas, weights=None, border=0, margin=0, cols=None, rows
 
 
 @_torch.no_grad()
-def unproject_patches(patches, thetas, weights=None, size=None, mode="bilinear", padding_mode="zeros", reduction="none", eps=1e-5, return_counts=False):
+def unproject_patches(patches_or_x, thetas, weights=None, size=None, mode="bilinear", padding_mode="zeros", reduction="none", eps=1e-5, return_counts=False):
     '''patches is in format TNCHW, thetas is in format TN33'''
+    if patches_or_x.dim() == 5:
+        patches = patches_or_x
+    elif patches_or_x.dim() == 4:
+        patches = project(x, thetas, mode="nearest")
+    else:
+        assert False, "expected 4d or 5d input"
+        
     projections = [] if reduction == "none" else None
     counts = None
     size = size or patches.shape[-2:]

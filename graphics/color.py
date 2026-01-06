@@ -41,7 +41,7 @@ def yuv_to_rgb(yuv, clamp=True):
     rgb = (yuv.transpose(-3,-1) @ m.mT).transpose(-3,-1).contiguous()
     return rgb.clamp(0,1) if clamp else rgb
 
-def feature_to_yuv(v, norm="center", scale=None, rotations=1):
+def feature_to_yuv(v, norm="std_mean", scale=None, rotations=1):
     c = v.shape[-3]
     scale = scale or 0.6
     z = _torch.polar(
