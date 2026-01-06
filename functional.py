@@ -121,7 +121,7 @@ def interpolated_cat(input, size=None, dim=0):
     size = size or input[0].shape[dim]
     ...
 
-def interpolate(input, size=None, scale_factor=None, mode="nearest"):
+def interpolate(input, size=None, scale_factor=None, mode="nearest", **kwargs):
     if -1 in size:
         assert isinstance(input, (list, tuple))
         r = []
@@ -135,26 +135,29 @@ def interpolate(input, size=None, scale_factor=None, mode="nearest"):
                 scale = scales[0]
             s = [int(w*scale) if v == -1 else v 
                     for v,w in zip(size, x.shape[-len(size):])]
-            y = _F.interpolate(x[None], size=s, mode=mode)[0]
+            y = _F.interpolate(x[None], size=s, mode=mode, **kwargs)[0]
             r.append(y)
         return r
-        
+    if isinstance(input, (list, tuple)):
+        return torch.cat([interpolate(v.expand(1,*[-1]*(len(size)+1)), 
+                                        size, scale_factor, mode, **kwargs)
+                            for v in input])
     if mode == "tricubic":
         s = input.shape
         x = input.flatten(0,-4)
         for i in range(3):
-            x = interpolate(x, (x.shape[-2],size[-i]), mode="bicubic")
+            x = interpolate(x, (x.shape[-2],size[-i]), mode="bicubic", **kwargs)
             x = x.permute(0,2,3,1).contiguous()
         return x.view(*s[:-3], *size)
     elif input.dtype in { _torch.cfloat, _torch.cdouble }:
         return _torch.complex(
-            interpolate(input.real, size, scale_factor, mode),
-            interpolate(input.imag, size, scale_factor, mode))
+            interpolate(input.real, size, scale_factor, mode, **kwargs),
+            interpolate(input.imag, size, scale_factor, mode, **kwargs))
     
     else:
         r = _F.interpolate(input, size=size, 
                            scale_factor=scale_factor, 
-                           mode=mode)
+                           mode=mode, **kwargs)
         return r
         
 def _extrapolate2d(r):
@@ -260,6 +263,7 @@ def n_between(a,b,n=(),inclusive=True):
     return r.item() if r.dim() == 0 else r
     
 between = n_between
+
 
 def constant_or_between(v,a,b,n): 
     return n_between(a,b,n) if v is None else v

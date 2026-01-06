@@ -302,21 +302,13 @@ class CompoundLoss(_nn.ModuleList):
         else:
             return r
 
-class VideoDataset(_torch.utils.data.Dataset):
-    def __init__(self, path, start=0, length=10):
-        eps = 1e-5
-        self.video, *_  = _torchvision.io.read_video(path, 
-                                                     start_pts=start, 
-                                                     end_pts=start+length-eps, 
-                                                     pts_unit="sec", 
-                                                     output_format="TCHW")
-
-    def __len__(self):
-        return self.video.shape[0]
-
-    def __getitem__(self, idx):
-        frame = self.video[idx]/255
-        frame = _TF.center_crop(frame, 480)
-        frame = _F.interpolate(frame[None], (S,S))[0]
-        return frame
-
+class Between:
+    def __init__(self, a, b, n=(), inclusive=True):
+        self.a = a
+        self.b = b
+        self.n = n
+        self.inclusive = inclusive
+    
+    def __call__(self):
+        return _Fx.n_between(self.a, self.b, self.n, self.inclusive)
+        
