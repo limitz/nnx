@@ -107,7 +107,7 @@ class SyncGroupNorm(_nn.Module):
             var = x2 - mean.pow(2)
             std = var.sqrt()
             std = _torch.where(_torch.isnan(std),
-                               _torch.zeros_like(std)
+                               _torch.zeros_like(std),
                                std)
         else:
             std, mean = torch.std_mean(groups,-1,correction=0,

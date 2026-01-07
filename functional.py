@@ -12,6 +12,7 @@ def expand(t, shape):
         
 def tensor(x, shape=None, device=None, dtype=None):
     if not isinstance(x, _torch.Tensor): 
+        if callable(x): x = x()
         if isinstance(x, (list, tuple, _torch.Size)):
             if any(isinstance(v,_torch.Tensor) for v in x):
                 for t in x:
@@ -22,7 +23,7 @@ def tensor(x, shape=None, device=None, dtype=None):
                 assert shape is not None
                 x = [expand(v,shape).to(device).to(dtype) 
                      if isinstance(v, _torch.Tensor) 
-                     else expand(_torch.tensor(v, dtype=dtype, device=device), shape)
+                     else expand(tensor(v, dtype=dtype, device=device), shape)
                      for v in x]
                 x = _torch.cat(x, shape.index(-1))
             else:    
@@ -36,6 +37,8 @@ def tensor(x, shape=None, device=None, dtype=None):
         x = x.to(device)
     if dtype is not None:
         x = x.to(dtype)
+    if shape is not None:
+        x = x.expand(shape)
     return x
 
 def crop_view(input, box):
@@ -76,7 +79,8 @@ def pad_to(input, size, mode="center", *args, **kwargs):
             input = input.transpose(-dim-1,-1)
             p[1] = 0
     return _F.pad(input, padding.mT.reshape(-1).unbind(), *args, **kwargs)
-        
+
+crop_to = pad_to
 
 def padstack(tensors, dim=0, pad_mode="constant", pad_value=0):
     assert len(tensors) > 0
@@ -144,11 +148,11 @@ def interpolate(input, size=None, scale_factor=None, mode="nearest", **kwargs):
                             for v in input])
     if mode == "tricubic":
         s = input.shape
-        x = input.flatten(0,-4)
+        x = input.flatten(0,1)
         for i in range(3):
-            x = interpolate(x, (x.shape[-2],size[-i]), mode="bicubic", **kwargs)
-            x = x.permute(0,2,3,1).contiguous()
-        return x.view(*s[:-3], *size)
+            x = interpolate(x, (x.shape[-2],size[-i-1]), mode="bicubic", **kwargs)
+            x = x.permute(0,3,1,2).contiguous()
+        return x.view(*s[:2], *size)
     elif input.dtype in { _torch.cfloat, _torch.cdouble }:
         return _torch.complex(
             interpolate(input.real, size, scale_factor, mode, **kwargs),
