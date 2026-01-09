@@ -13,8 +13,9 @@ import re as _re
 
 
 class EMA:
-    def __init__(self, gamma=0.999, correction=1,
-                 style="<b>{mean:0.04f}</b> <lightgray>(+-{std:0.04f})</>"):
+    def __init__(self, gamma=0.999, correction=1, title=None,
+                 style="<white>{title}<b>{mean:0.04f}</b> <lightgray>(+-{std:0.04f})</>"):
+        self.title = title
         self.style = style
         self.gamma = gamma
         self.correction = correction
@@ -37,11 +38,12 @@ class EMA:
         return (self.x[2] / (self.x[0]+self.correction)) ** 0.5
 
     def __str__(self):
-        r = strip(self.style).format(mean=self.mean, std=self.std)
+        r = strip(self.__style_str__())
         return r
         
     def __style_str__(self, style=None):
-        r = self.style.format(mean=self.mean, std=self.std)
+        title = (self.title + ": ") if self.title is not None else "" 
+        r = self.style.format(mean=self.mean, std=self.std, title=title)
         return r
             
 class Timer:
@@ -263,7 +265,7 @@ def strip(arg, control="<>"):
     
     
 def csi_render(arg, control="<>"):
-    pat = _re.escape(control[0]) + "([#\\~/a-zA-Z_0-9\\-]+)" + _re.escape(control[1])
+    pat = _re.escape(control[0]) + "([#\\\\~/a-zA-Z_0-9\\\\-]+)" + _re.escape(control[1])
     arg = str(arg)
     arg = _re.sub(pat, _re_find_color, arg)
     return arg
