@@ -38,9 +38,9 @@ class StaticConv3d(StaticConvNd):
         super().__init__(3, *args, **kwargs)
 
 class Skip(_nn.Sequential):
-    def forward(self,x):
-        return x + super().forward(x)
-
+    def forward(self,x,r=None):
+        r = r if r is not None else x
+        return x + super().forward(r)
 class ModuleFunction(_nn.Module):
     def __init__(self, *args, _module=_torch, _attr=None, _dereference=False, _postprocess=None,
                  **kwargs):
@@ -302,6 +302,152 @@ class CompoundLoss(_nn.ModuleList):
         else:
             return r
 
+class StackAccess(_nn.Module):
+    def __init__(self, module=None):
+        super().__init__()
+        self.module = module
+        self._scope = {}
+        self._stack = {}
+        self._store = {}
+        self._pre_hook = self.register_forward_pre_hook(self.enter)
+
+    @staticmethod
+    def enter(self, x, **kwargs):
+        device = _Fx.guess_device([x, self])
+        if self._scope.get(device) is not None: 
+            return
+        self._scope[device] = self
+        self._stack[device] = []
+        self._store[device] = {}
+        
+        for m in self.modules():
+            if isinstance(m, StackAccess):
+                m._stack = self._stack
+                m._store = self._store
+                m._scope = self._scope
+
+    def push(self, x, index=None, name=None, **kwargs):
+        device = _Fx.guess_device([x, self])
+        if index is not None:
+            self._stack[device].insert(x, index)
+        elif name is not None:
+            self._store[device][name] = x
+        else:
+            self._stack[device].append(x)
+        return x
+
+    def pop(self, index=None, name=None, device=None, **kwargs):
+        device = device or _Fx.guess_device([self])
+        if index is not None:
+            return self._stack[device].pop(index)
+        elif name is not None:
+            return self._store[device][name]
+        else:
+            return self._stack[device].pop(-1)
+
+    def extra_repr(self):
+        return super().extra_repr()
+
+    def __repr__(self):
+        return super().__repr__() + " [stack access]"
+        
+    def forward(self, x):
+        if self.module is not None:
+            return self.module(x)
+        else:
+            assert False, "override must be implemented in subclass"
+
+class Push(StackAccess):
+    def __init__(self, *index_or_name, index=None, name=None):
+        super().__init__()
+        if index is None and name is None:
+            if len(index_or_name)==1:
+                if isinstance(index_or_name[0], str):
+                    name = index_or_name[0]
+                else:
+                    index = index_or_name[0]
+        assert index is None or name is None, "use either index or name, not both"
+        self.index = index
+        self.name = name
+
+    def forward(self, x):
+        self.push(x, index=self.index, name=self.name)
+        return x
+
+    def extra_repr(self):
+        if self.name is not None:
+            r = f"\"{self.name}\""
+        elif self.index is not None:
+            r = f"{self.index}"
+        else:
+            r = ""
+        return r
+
+class Pop(StackAccess):
+    def __init__(self, *index_or_name, index=None, name=None, reduction=None, dim=None, 
+                 unsafe=False):
+        super().__init__()
+        if index is None and name is None:
+            if len(index_or_name)==1:
+                if isinstance(index_or_name[0], str):
+                    name = index_or_name[0]
+                else:
+                    index = index_or_name[0]
+        assert index is None or name is None, "use either index or name, not both"
+        if isinstance(reduction, str) and reduction.startswith("lambda"):
+            assert unsafe, "passing reduction as a string uses `eval` and could be " + \
+                           "unsafe, pass unsafe=True if you're sure you want to do this"
+            
+        self.index = index
+        self.name = name
+        self.reduction = reduction
+        self.dim = dim
+        self.unsafe = unsafe
+    
+    def forward(self, x):
+        r = self.pop(index=self.index, name=self.name)
+        reduction = self.reduction
+        
+        if isinstance(reduction, str) and reduction.startswith("lambda"):
+            assert self.unsafe, "unsafe must be set to True when evaluating str"
+            reduction = eval(reduction)
+        if callable(reduction):
+            return reduction(x,r)
+        elif reduction in {"skip", "add"}:
+            return r + x
+        elif reduction == "mul":
+            return r * x    
+        elif reduction == "max":
+            return torch.maximum(x,r)
+        elif reduction == "min":
+            return torch.minimum(x,r)
+        elif reduction == "mean":
+            return x.add(r).div(2)
+        elif reduction == "cat":
+            return _torch.cat([x,r], self.dim or 1)
+        elif reduction =="stack":
+            return _torch.stack([x,r], self.dim or 1)
+        else:
+            return r
+        
+    def extra_repr(self):
+        if self.name is not None:
+            r = f"\"{self.name}\""
+        elif self.index is not None:
+            r = f"{self.index}"
+        else:
+            r = ""
+        if self.reduction is not None:
+            if len(r)>0: r = r + ", "
+            r = r + f"reduction={self.reduction}"
+        if self.dim is not None:
+            if len(r)>0: r = r + ", "
+            r = r + f"dim={self.dim}"
+        if self.unsafe:
+            if len(r)>0: r = r + ", "
+            r = r + "unsafe=True"
+        return r
+        
 class Between:
     def __init__(self, a, b, n=(), inclusive=True):
         self.a = a

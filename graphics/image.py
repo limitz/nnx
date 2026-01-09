@@ -37,7 +37,19 @@ def rgb(image, dtype=_torch.float, **kwargs):
 def rgb8(image, **kwargs):
     assert "dtype" not in kwargs
     return rgb(image, dtype=_torch.uint8, **kwargs) 
-        
+
+def alpha_blend_3d(image, blend_dim=-3):
+    assert image.dim() >= 4
+    d = image.unbind(blend_dim)
+    r = _torch.zeros_like(d[0])
+    for plane in d:
+        if plane.shape[-3] == 4:
+            alpha = plane[..., -1:, :, :]
+        else:
+            alpha = plane
+        r = r * (1-alpha) + plane * alpha
+    return r
+    
 def plot(image, title="", width=20, height=None, **kwargs):
     v = rgb8(image, **kwargs) 
     height = height or (width * v.shape[-2] / v.shape[-1])

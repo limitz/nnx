@@ -1,10 +1,25 @@
 import torch as _torch
+import torch.nn as _nn
 import torch.nn.functional as _F
 import torch.nn.functional as legacy
 from torch.nn.functional import *
 import cv2 as _cv2
 import math as _math
 
+def guess_device(x, default=_torch.device("cpu")):
+    if isinstance(x, _torch.Tensor): return x.device
+    if isinstance(x, _nn.Module) and len(list(x.parameters())) > 0: 
+        return next(iter(x.parameters())).device
+    elif isinstance(x, (list, tuple)):
+        for v in x:
+            g = guess_device(v)
+            if g is not None: return g
+    elif isinstance(x, dict):
+        for v in x.values():
+            g = guess_device(v)
+            if g is not None: return g
+    else:
+        return default
 
 def expand(t, shape):
     shape = [1 if t.dim() <= i and s == -1 else s for i,s in enumerate(reversed(shape))]
