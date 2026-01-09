@@ -12,6 +12,38 @@ import time as _time
 import re as _re
 
 
+class EMA:
+    def __init__(self, gamma=0.999, correction=1,
+                 style="<b>{mean:0.04f}</b> <lightgray>(+-{std:0.04f})</>"):
+        self.style = style
+        self.gamma = gamma
+        self.correction = correction
+        self.x = [0,0,0]
+        
+    def update(self, value):
+        if isinstance(value, _torch.Tensor): 
+            value = value.mean().item()
+        var = (value - self.mean)**2
+        self.x[0] = self.x[0]*self.gamma + 1
+        self.x[1] = self.x[1]*self.gamma + value
+        self.x[2] = self.x[2]*self.gamma + var
+
+    @property
+    def mean(self):
+        return self.x[1] / (self.x[0]+self.correction)
+
+    @property
+    def std(self):
+        return (self.x[2] / (self.x[0]+self.correction)) ** 0.5
+
+    def __str__(self):
+        r = strip(self.style).format(mean=self.mean, std=self.std)
+        return r
+        
+    def __style_str__(self, style=None):
+        r = self.style.format(mean=self.mean, std=self.std)
+        return r
+            
 class Timer:
     def __init__(self, style="<green>[<b>{time_str}</b><green>:{seconds}]</>"):
         self.style = style
@@ -104,21 +136,21 @@ class TrueColor:
         self.register("gray", "#777777")
         self.register("darkgray", "#222222")
         self.register("black", "#000000")
-        self.registered_colors["/"] = "\x1b[0m"
-        self.registered_colors["b"] = "\x1b[1m"
-        self.registered_colors["/b"] = "\x1b[22m"
-        self.registered_colors["f"] = "\x1b[2m"
-        self.registered_colors["/f"] = "\x1b[22m"
-        self.registered_colors["i"] = "\x1b[3m"
-        self.registered_colors["/i"] = "\x1b[23m"
-        self.registered_colors["u"] = "\x1b[4m"
-        self.registered_colors["/u"] = "\x1b[24m"
-        self.registered_colors["blink"] = "\x1b[6m"
-        self.registered_colors["/blink"] = "\x1b[26m"
+        self.registered_colors["/"] = ("\x1b[0m", "reset to default")
+        self.registered_colors["b"] = ("\x1b[1m", "bold")
+        self.registered_colors["/b"] = ("\x1b[22m", "not bold")
+        self.registered_colors["f"] = ("\x1b[2m", "f?")
+        self.registered_colors["/f"] = ("\x1b[22m", "not f?")
+        self.registered_colors["i"] = ("\x1b[3m", "italic")
+        self.registered_colors["/i"] = ("\x1b[23m", "not italic")
+        self.registered_colors["u"] = ("\x1b[4m", "underlined")
+        self.registered_colors["/u"] = ("\x1b[24m", "not underlined")
+        self.registered_colors["blink"] = ("\x1b[6m", "blinking")
+        self.registered_colors["/blink"] = ("\x1b[26m", "not blinking")
             
     def register(self, name, rgb):
         c = self.__getitem__(rgb, exclude_prefix=True)
-        self.registered_colors[name] = c
+        self.registered_colors[name] = (c, f"color {name} ({rgb})")
         
     def __getitem__(self, color, exclude_prefix=False):
         if isinstance(color, str):
@@ -142,7 +174,7 @@ class TrueColor:
                 prefix = ""
             
             if color in self.registered_colors:
-                c = self.registered_colors[color]
+                c,_ = self.registered_colors[color]
                 if c.startswith("\x1b"): return c
                 else: return f"{prefix}{c}"
             
@@ -151,7 +183,7 @@ class TrueColor:
                     r,g,b = (int(color[i*2:2+i*2],base=16) 
                              for i in range(3))
                 elif len(color) == 3:
-                    r,g,b = (int(color[i*2:2+i*2],base=16) * 17 
+                    r,g,b = (int(color[i:1+i],base=16) * 17 
                              for i in range(3))
                 else:
                     assert False, "expected 3 or 6 hex digits after #" 
@@ -181,6 +213,9 @@ def _re_find_color(match):
 def is_csi_token(c):
     return c.startswith("\x1b") and c.endswith("m")
 
+def is_control_token(c, control="<>"):
+    return c.startswith(control[0]) and c.endswith(control[1])
+    
 def csi_split(arg):
     r = []
     while len(arg) > 0:
@@ -209,17 +244,38 @@ def csi_tokenize(arg):
             r.append(arg[0])
             arg = arg[1:]
     return r
+
+
+def control_tokenize(arg, control="<>"):
+    r = []
+    while len(arg) > 0:
+        if arg[0] == control[0]:
+            end = arg.index(control[1])
+            r.append(arg[:end+1])
+            arg = arg[end+1:]
+        else:
+            r.append(arg[0])
+            arg = arg[1:]
+    return r
+
+def strip(arg, control="<>"):
+    return "".join([v for v in control_tokenize(arg) if not is_control_token(v, control)])
+    
     
 def csi_render(arg, control="<>"):
-    pat = _re.escape(control[0]) + "([\\~/a-zA-Z_0-9\\-]+)" + _re.escape(control[1])
+    pat = _re.escape(control[0]) + "([#\\~/a-zA-Z_0-9\\-]+)" + _re.escape(control[1])
     arg = str(arg)
     arg = _re.sub(pat, _re_find_color, arg)
     return arg
     
 _original_print = print
-def print(*args, control="<>", **kwargs):
+def print(*args, control="<>", style=True, **kwargs):
     r = []
     for arg in args:
+        if hasattr(arg, "__style_str__"):
+            arg = arg.__style_str__(style)
+        else:
+            arg = str(arg)
         r.append(csi_render(arg, control=control))
     r.append(color["/"])
     _original_print(*r, **kwargs)
