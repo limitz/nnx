@@ -175,7 +175,7 @@ class ForEach(_nn.Sequential):
             if len(r):
                 s = r[0].shape
                 if all(v.shape == s for v in s[1:]):
-                    return torch.stack(r)
+                    return _torch.stack(r)
         return r
 class Tee(_nn.Sequential):
     def forward(self, x):
@@ -302,10 +302,10 @@ class CompoundLoss(_nn.ModuleList):
         else:
             return r
 
-class StackAccess(_nn.Module):
-    def __init__(self, module=None):
-        super().__init__()
-        self.module = module
+class Scope(_nn.Sequential):
+    def __init__(self, *args, name="global"):
+        super().__init__(*args)
+        self._name = name
         self._scope = {}
         self._stack = {}
         self._store = {}
@@ -345,18 +345,10 @@ class StackAccess(_nn.Module):
         else:
             return self._stack[device].pop(-1)
 
-    def extra_repr(self):
-        return super().extra_repr()
-
-    def __repr__(self):
-        return super().__repr__() + " [stack access]"
+class StackAccess(Scope):
+    def __init__(self):
+        super().__init__(name = "_inherit")
         
-    def forward(self, x):
-        if self.module is not None:
-            return self.module(x)
-        else:
-            assert False, "override must be implemented in subclass"
-
 class Push(StackAccess):
     def __init__(self, *index_or_name, index=None, name=None):
         super().__init__()
@@ -405,7 +397,8 @@ class Pop(StackAccess):
         self.unsafe = unsafe
     
     def forward(self, x):
-        r = self.pop(index=self.index, name=self.name)
+        device = _Fx.guess_device([x,self])
+        r = self.pop(index=self.index, name=self.name, device=device)
         reduction = self.reduction
         
         if isinstance(reduction, str) and reduction.startswith("lambda"):
