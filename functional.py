@@ -542,7 +542,7 @@ def gaussian(size, position=0, *, sigma=1, dims=None, reduction="prod", **kwargs
     args = [gaussian_at(ks, p, s) for ks,p,s in zip(size, position, sigma)]
     mesh = _torch.meshgrid(*args, indexing="ij")
     r = _torch.stack(mesh)
-    return reduce(r,reduction, dim=0)
+    return reduce(r, reduction, dim=0)
 
 def window(size, type="gaussian", pow=1, **kwargs):
     if type in {"gaussian"}: r = gaussian(size, **kwargs)

@@ -50,6 +50,18 @@ def alpha_blend_3d(image, blend_dim=-3):
         r = r * (1-alpha) + plane * alpha
     return r
     
+       
+def save(image, path, **kwargs):
+    v = rgb8(image, **kwargs)
+    if v.dim() > 3:
+        v = _GFx.make_grid(v, **kwargs)
+    v = v.cpu()
+    if path.endswith(".png"):
+        _torchvision.io.write_png(v, path)
+    else:
+        _torchvision.io.write_jpeg(v, path)
+
+
 def plot(image, title="", width=20, height=None, **kwargs):
     v = rgb8(image, **kwargs) 
     height = height or (width * v.shape[-2] / v.shape[-1])
