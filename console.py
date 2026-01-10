@@ -14,7 +14,7 @@ import re as _re
 
 class EMA:
     def __init__(self, gamma=0.999, correction=1, title=None,
-                 style="<white>{title}<b>{mean:0.04f}</b> <lightgray>(+-{std:0.04f})</>"):
+                 style="<white>{title}<b>{mean:0.04f}</b> (+-{std:0.04f})</>"):
         self.title = title
         self.style = style
         self.gamma = gamma
@@ -42,7 +42,7 @@ class EMA:
         return r
         
     def __style_str__(self, style=None):
-        title = (self.title + ": ") if self.title is not None else "" 
+        title = (self.title + " ") if self.title is not None else "" 
         r = self.style.format(mean=self.mean, std=self.std, title=title)
         return r
             
@@ -101,7 +101,7 @@ class ProgressBar:
     def __str__(self):
         r = ""
         if self.title:
-            r += csi_render(self.title) + ": "
+            r += csi_render(self.title) + " "
         r += self.style[0]
         d = (self.max_value - self.min_value)
         v = (self.value - self.min_value)

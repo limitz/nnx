@@ -302,6 +302,68 @@ class CompoundLoss(_nn.ModuleList):
         else:
             return r
 
+class GradientMSELoss(_nn.Module):
+    def __init__(self, dim=None, spacing=1, edge_order=1, reduction="mean", keepdim=False):
+        super().__init__()
+        self.mse = _nn.MSELoss(reduction="none")
+        self.dim = dim
+        self.reduction = reduction
+        self.keepdim = keepdim
+        self.spacing = spacing
+        self.edge_order = edge_order
+        
+    def forward(self, pred, target):
+        assert pred.shape == target.shape
+        dims = self.dim or list(range(2,pred.dim()))
+        if not isinstance(dims, (tuple,list)): dims = [dims]
+        dims = [d + pred.dim() if d < 0 else d for d in dims]
+        pred = _torch.gradient(pred, dim=self.dim, spacing=self.spacing, 
+                              edge_order=self.edge_order)
+        target = _torch.gradient(target, dim=self.dim, spacing=self.spacing,
+                                edge_order=self.edge_order)
+        pred = _torch.stack(pred)
+        target = _torch.stack(target)
+        loss = self.mse(pred, target)
+        if self.reduction == "none":
+            return loss
+        elif self.reduction == "dim":
+            return loss.mean(dims, keepdim=self.keepdim)
+        else:
+            return _Fx.reduce(loss, self.reduction, keepdim=self.keepdim)
+        
+class DiffMSELoss(_nn.Module):
+    def __init__(self, dim=None, reduction="mean", keepdim=False):
+        super().__init__()
+        self.mse = _nn.MSELoss(reduction="none")
+        self.dim = dim
+        self.reduction = reduction
+        self.keepdim = keepdim
+
+    def forward(self, pred, target):
+        assert pred.shape == target.shape
+        dims = self.dim or list(range(2,pred.dim()))
+        if not isinstance(dims, (tuple,list)): dims = [dims]
+        dims = [d + pred.dim() if d < 0 else d for d in dims]
+        pred = [pred.diff(dim=d) for d in dims]
+        target = [target.diff(dim=d) for d in dims]
+        if self.reduction == "none":
+            for x in (pred, target):
+                for i,d in enumerate(dims):
+                    p = x[i].transpose(d,-1)
+                    p = (_F.pad(p,(0,1)) + _F.pad(p, (1,0))) / 2
+                    x[i] = p.transpose(d,-1).contiguous()
+            loss = _torch.stack([self.mse(p,t) for p,t in zip(pred, target)])
+            return loss
+        else:
+            loss = _torch.stack([_Fx.reduce(self.mse(p,t), "mean", 
+                                            dim=dims, keepdim=self.keepdim) 
+                                 for p,t in zip(pred, target)])
+            loss = loss.mean(0)
+            
+            if self.reduction != "dim":
+                loss = _Fx.reduce(loss, self.reduction, keepdim=self.keepdim)
+            return loss 
+        
 class Scope(_nn.Sequential):
     def __init__(self, *args, name="global"):
         super().__init__(*args)
@@ -440,7 +502,7 @@ class Pop(StackAccess):
             if len(r)>0: r = r + ", "
             r = r + "unsafe=True"
         return r
-        
+
 class Between:
     def __init__(self, a, b, n=(), inclusive=True):
         self.a = a
@@ -449,5 +511,8 @@ class Between:
         self.inclusive = inclusive
     
     def __call__(self):
-        return _Fx.n_between(self.a, self.b, self.n, self.inclusive)
+        a = self.a() if callable(self.a) else self.a
+        b = self.b() if callable(self.b) else self.b
+        n = self.n() if callable(self.n) else self.n
+        return _Fx.n_between(a, b, n, self.inclusive)
         
