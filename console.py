@@ -274,41 +274,50 @@ def strip_csi(arg):
 def strip_all(arg, control="<>"):
     return strip_control(strip_csi(arg), control)
 
-
-def wrap_text(text, wrap_or_size=None, font_width=11,  
-              spacing=0, padding=0):
-    
-    if isinstance(wrap_or_size, (tuple, list, _torch.Size, _torch.Tensor)):
-        size = wrap_or_size
-        wrap = None
-    else:
-        size = None
-        wrap = wrap_or_size
-    if not isinstance(spacing, (list, tuple)):
-        spacing = [spacing] * 2
+def pad(text, padding, pad_char=" ", fill=True, align="left"):
+    size = size_of(text)
     if not isinstance(padding, (list, tuple)):
         padding = [padding] * 4
     if len(padding) == 2:
         padding = [padding[0],padding[0],padding[1],padding[1]]
     assert len(padding) == 4
-
-    if size is not None:
-        width_of_char = font_width + spacing[0]
-        width_available = size[0] - (padding[0] + padding[1]) + spacing[0] 
-        max_chars_per_line = width_available // width_of_char
-    elif wrap is not None:
-        max_chars_per_line = wrap
-    else:
-        max_chars_per_line = 1<<32
+    lines = [line for line in text.strip().split("\n")]
+    lines = [pad_char * size[1]] * padding[-2] + \
+            lines + \
+            [pad_char * size[1]] * padding[-1]
+    if fill:
+        sizes = [size_of(line) for line in lines]
+        if align in {"near", "left"}:
+            lines = [line + pad_char * (size[1] - ls[1])
+                     for line,ls in zip(lines, sizes)]
+        elif align in {"far","right"}:
+            lines = [pad_char * (size[1] - ls[1]) + line
+                     for line,ls in zip(lines, sizes)]
+        elif align in {"center","middle"}:
+            lines = [pad_char * ((size[1] - ls[1])//2) + \
+                     line + \
+                     pad_char * ((size[1] - ls[1]) - (size[1] - ls[1])//2)
+                     for line,ls in zip(lines,sizes)]
+    lines = [pad_char * padding[0] + line + pad_char * padding[1] 
+             for line in lines]
+    return "\n".join(lines)
     
+def size_of(text):
+    lines = [line for line in text.strip().split("\n")]
+    lines = [strip_all(line) for line in lines]
+    width = max(len(line) for line in lines)
+    height = len(lines)
+    return _torch.Size((height, width))
+    
+def wrap(text, wrap, padding=0):
     lines = text.strip().split("\n")
     i = 0
     while i < len(lines):
         line = lines[i] 
         stripped = strip_all(line)
-        if len(stripped) > max_chars_per_line:
+        if len(stripped) > wrap:
             lines.insert(i+1,"")
-        while len(stripped) > max_chars_per_line:
+        while len(stripped) > wrap:
             if not " " in line: break
             line, word = line.rsplit(" ", 1)
             stripped = strip_all(line)
