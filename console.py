@@ -11,6 +11,11 @@ import os as _os
 import time as _time
 import re as _re
 
+def style_str(item, style=None):
+    if hasattr(item, "__style_str__"):
+        return item.__style_str__(style)
+    else:
+        return str(item)
 
 class EMA:
     def __init__(self, gamma=0.999, correction=1, title=None,
@@ -260,9 +265,60 @@ def control_tokenize(arg, control="<>"):
             arg = arg[1:]
     return r
 
-def strip(arg, control="<>"):
+def strip_control(arg, control="<>"):
     return "".join([v for v in control_tokenize(arg) if not is_control_token(v, control)])
+
+def strip_csi(arg):
+    return "".join([v for v in csi_tokenize(arg) if not is_csi_token(v)])
+
+def strip_all(arg, control="<>"):
+    return strip_control(strip_csi(arg), control)
+
+
+def wrap_text(text, wrap_or_size=None, font_width=11,  
+              spacing=0, padding=0):
     
+    if isinstance(wrap_or_size, (tuple, list, _torch.Size, _torch.Tensor)):
+        size = wrap_or_size
+        wrap = None
+    else:
+        size = None
+        wrap = wrap_or_size
+    if not isinstance(spacing, (list, tuple)):
+        spacing = [spacing] * 2
+    if not isinstance(padding, (list, tuple)):
+        padding = [padding] * 4
+    if len(padding) == 2:
+        padding = [padding[0],padding[0],padding[1],padding[1]]
+    assert len(padding) == 4
+
+    if size is not None:
+        width_of_char = font_width + spacing[0]
+        width_available = size[0] - (padding[0] + padding[1]) + spacing[0] 
+        max_chars_per_line = width_available // width_of_char
+    elif wrap is not None:
+        max_chars_per_line = wrap
+    else:
+        max_chars_per_line = 1<<32
+    
+    lines = text.strip().split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i] 
+        stripped = strip_all(line)
+        if len(stripped) > max_chars_per_line:
+            lines.insert(i+1,"")
+        while len(stripped) > max_chars_per_line:
+            if not " " in line: break
+            line, word = line.rsplit(" ", 1)
+            stripped = strip_all(line)
+            word = word.strip()
+            if len(word) == 0: continue
+            if len(lines[i+1]) == 0: lines[i+1] = word
+            else: lines[i+1] = word + " " + lines[i+1]
+        lines[i] = line
+        i += 1
+    return "\n".join(lines)
     
 def csi_render(arg, control="<>"):
     pat = _re.escape(control[0]) + "([#\\\\~/a-zA-Z_0-9\\\\-]+)" + _re.escape(control[1])
