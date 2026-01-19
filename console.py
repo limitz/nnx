@@ -301,6 +301,8 @@ def pad(text, padding, pad_char=" ", fill=True, align="left"):
     lines = [pad_char * padding[0] + line + pad_char * padding[1] 
              for line in lines]
     return "\n".join(lines)
+
+
     
 def size_of(text):
     lines = [line for line in text.strip().split("\n")]

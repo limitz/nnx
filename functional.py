@@ -444,8 +444,8 @@ def random_flow_field_3d(nps=((3,5),(4,6),(9,14)),
         field = field - linfield(size, device=device)
     return field
 
-def gaussian_at(kernel_size, position=0, sigma=1, sym=True):
-    n = position + _torch.linspace(-1,1,kernel_size)
+def gaussian_at(kernel_size, position=0, sigma=1, sym=True, device="cpu"):
+    n = position + _torch.linspace(-1,1,kernel_size, device=device)
     sig2 = (2 * sigma * sigma)
     w = _torch.exp(-(n ** 2 / sig2))
     return w
@@ -530,7 +530,7 @@ def reduce(input, reduction="mean", dim=None, keepdim=False,
             assert False, "invalid reduction"
         return r
 
-def gaussian(size, position=0, *, sigma=1, dims=None, reduction="prod", **kwargs):
+def gaussian(size, position=0, *, sigma=1, dims=None, reduction="prod", device="cpu", **kwargs):
     if dims is None: dims = len(size)
     size = tensor(size, dims)
     sigma = tensor(sigma, dims)
@@ -539,7 +539,9 @@ def gaussian(size, position=0, *, sigma=1, dims=None, reduction="prod", **kwargs
     #    position = (position / size) * 2 - 1
     #if sigma.dtype not in { _torch.float, _torch.double }:
     #    sigma = (sigma / size) * 2 - 1
-    args = [gaussian_at(ks, p, s) for ks,p,s in zip(size, position, sigma)]
+    args = [gaussian_at(ks, p, s, device=device) 
+            if ks > 1 else _torch.ones(abs(ks)) 
+            for ks,p,s in zip(size, position, sigma)]
     mesh = _torch.meshgrid(*args, indexing="ij")
     r = _torch.stack(mesh)
     return reduce(r, reduction, dim=0)
@@ -547,7 +549,9 @@ def gaussian(size, position=0, *, sigma=1, dims=None, reduction="prod", **kwargs
 def window(size, type="gaussian", pow=1, **kwargs):
     if type in {"gaussian"}: r = gaussian(size, **kwargs)
     else:
-        args = [_torch.linspace(-1, 1, ks) for ks,s in zip(size)]
+        args = [_torch.linspace(-1, 1, ks) 
+                if ks > 1 else _torch.ones(abs(ks)) 
+                for ks in size]
         mesh = _torch.meshgrid(*args, indexing="ij")
         r = _torch.stack(mesh)
         if type in {"cos", "cosine"}:
@@ -557,7 +561,7 @@ def window(size, type="gaussian", pow=1, **kwargs):
         elif type in {"pyr", "pyramid","pyramidal"}:
             r = r.abs().neg().add(1)
         elif type in {"square", "box"}:
-            r = _torch.ones_like(r[:1])
+            r = _torch.ones_like(r[1:])
         elif type in {"circle", "circular", "sphere", "spherical"}:
             r = r.pow(2).sum(0, keepdim=True).sqrt().lt(1).float()
         elif type in {"cone", "conical"}:

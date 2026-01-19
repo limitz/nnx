@@ -117,6 +117,41 @@ def project(x, thetas, size=None, mode="bilinear", padding_mode="zeros"):
     return r
 
 
+def matrix_field_nd(m, size):
+    d = len(size)
+    field = linfield(size)
+    field = _F.pad(field, (0,1), "constant", 1)
+    field = field.unsqueeze(-2) @ m.view(*m.shape[:-2],1,1,1,d+1,d+1).mT
+    field = field.squeeze(-2)
+    field = field[...,:-1] / field[...,-1:]
+    return field
+    
+def project_nd(x, thetas, size=None, mode="bilinear", padding_mode="zeros", split_dim=None):
+    r = []
+    d = thetas.shape[-1]
+    if isinstance(x,list):
+        for v, t in zip(x, thetas.split(1,-3)):
+            y = project_3d(v, t, size=size, mode=mode, padding_mode=padding_mode, split_dim=split_dim)
+            r.append(y)
+        return _torch.cat(r,-d-2)
+    else:
+        x = x.expand(*(thetas.shape[:-2] + [-1] * (d+1)))
+        if split_dim is not None:
+            assert split_dim > 0
+            for v, t in zip(x.split(1,split_dim), thetas.split(1, split_dim)):
+                y = project_3d(v, t, size=size, mode=mode, padding_mode=padding_mode, split_dim=None)
+                r.append(y)
+            return _torch.cat(r, split_dim)
+        else:
+            thetas = _torch.nan_to_num(thetas)
+            size = size or x.shape[-d:]
+            field = matrix_field_nd(thetas, size)
+            ...
+            y = grid_sample(x.flatten(0,-d-2), grid, 
+                            align_corners=True, mode=mode, 
+                            padding_mode=padding_mode)
+            return _torch.stack(r)
+
 def gaussian_splat_2d(thetas, size, weights=None, sigma=1, reduction="none"):
     h,w = size
     p,n,*_ = thetas.shape
@@ -519,12 +554,12 @@ def matrix_remove_col(m, i):
 
 def matrix_insert_col(m, i, eye=False):
     if eye: 
-        insert = torch.arange(m.shape[-2],device=m.device)
+        insert = _torch.arange(m.shape[-2],device=m.device)
         insert = insert.eq(i).to(m.dtype)
         insert = insert.unsqueeze(-1)
         insert = insert.expand_as(m[...,[0]])
     else: 
-        insert = torch.zeros_like(m[...,[0]], device=m.device)
+        insert = _torch.zeros_like(m[...,[0]], device=m.device)
     return _torch.cat([
         m[...,:i],
         insert,
@@ -537,17 +572,28 @@ def matrix_remove_row(m, i):
     
 def matrix_insert_row(m, i, eye=False):
     if eye: 
-        insert = torch.arange(m.shape[-1],device=m.device)
+        insert = _torch.arange(m.shape[-1],device=m.device)
         insert = insert.eq(i).to(m.dtype)
         insert = insert.unsqueeze(-2)
         insert = insert.expand_as(m[...,[0],:])
     else: 
-        insert = torch.zeros_like(m[...,[0],:], device=m.device)
+        insert = _torch.zeros_like(m[...,[0],:], device=m.device)
     return _torch.cat([
         m[...,:i,:],
         insert,
         m[...,i:,:]],-2)
 
+def matrix_rotate_2d(rad):
+    return _torch.stack([
+        rad.cos(), -rad.sin(), _torch.zeros_like(rad),
+        rad.sin(), rad.cos(), _torch.zeros_like(rad),
+        _torch.zeros_like(rad), _torch.zeros_like(rad),
+        _torch.ones_like(rad)],-1).view(*rad.shape, 3,3)
+
+def matrix_rotate_3d(rad, dim=2):
+    rot2d = matrix_rotate_2d(rad)
+    return matrix_insert_dim(rot2d,dim)
+    
 def matrix_remove_dim(m, i):
     m = matrix_remove_row(m,i)
     m = matrix_remove_col(m,i)
