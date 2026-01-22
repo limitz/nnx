@@ -262,9 +262,12 @@ def linfield(*size, device="cpu"):
     if isinstance(size[0], (tuple, list)): 
         assert len(size) == 1
         size = size[0]
-    return _torch.stack(
-        _torch.meshgrid(*[_torch.linspace(-1,1,s,device=device) * s / (s+1)
-                         for s in reversed(size)], indexing="xy"), -1)
+    dims = [[1]*len(size) for _ in range(len(size))]
+    for i,d in enumerate(dims):
+        d[-i-1] = -1
+    return _torch.stack([
+        (_torch.linspace(-1,1,s,device=device) * s / (s+1)).view(d).expand(size)
+        for d,s in zip(dims,reversed(size))], -1)
 
 def norm(x, dim=None, eps=1e-8):
     return x.sub(x.mean(dim,keepdim=True)).div(x.std(dim,keepdim=True) + eps)

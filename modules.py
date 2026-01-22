@@ -271,7 +271,33 @@ class Affine(_nn.Module):
         w = self.weight.view(self.channels, [1] * (x.dim()-2))
         b = self.bias.view(self.channels, [1]*(x.dim()-2))
         return x * w + b
-     
+
+class Trainer(_nn.Module):
+    def __init__(self, module, loss, optimizer):
+        super().__init__()
+        self.module = module
+        self.loss = loss
+        self.optimizer = optimizer
+
+    def state_dict(self):
+        return dict(
+            module=self.module.state_dict(),
+            loss=self.loss.state_dict(),
+            optimizer=self.optimizer.state_dict())
+
+    def load_state_dict(self, state):
+        self.module.load_state_dict(state["module"])
+        self.loss.load_state_dict(state["loss"])
+        self.optimizer.load_state_dict(state["optimizer"])
+
+    def forward(self, x, target):
+        pred = self.module(x)
+        loss = self.loss(pred, target)
+        return pred, loss
+        
+    def step(self):
+        return self.optimizer.step()
+
 class CompoundLoss(_nn.ModuleList):
     def __init__(self, losses, strict=True):
         assert isinstance(losses, (dict, list, tuple)), "invalid argument"

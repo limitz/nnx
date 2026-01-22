@@ -154,6 +154,7 @@ class TrueColor:
         self.registered_colors["/u"] = ("\x1b[24m", "not underlined")
         self.registered_colors["blink"] = ("\x1b[6m", "blinking")
         self.registered_colors["/blink"] = ("\x1b[26m", "not blinking")
+        self.registered_colors["clear"] = ("\x1b[0K", "clear line")
             
     def register(self, name, rgb):
         c = self.__getitem__(rgb, exclude_prefix=True)

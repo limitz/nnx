@@ -12,5 +12,6 @@ import time as _time
 from .text import *
 from .color import *
 from .video import *
+from .audio import *
 from .image import *
 from .functional import *

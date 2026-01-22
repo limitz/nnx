@@ -174,12 +174,7 @@ def gaussian_splat_2d(thetas, size, weights=None, sigma=1, reduction="none"):
 def gaussian_splat_3d(thetas, size, weights=None, sigma=1, reduction="none"):
     d,h,w = size
     p,n,*_ = thetas.shape
-    pt = _torch.stack(
-        _torch.meshgrid(
-            _torch.linspace(-1,1,h),
-            _torch.linspace(-1,1,d),
-            _torch.linspace(-1,1,w),
-            indexing="xy"),-1).to(thetas.device)
+    pt = linfield(size, device=thetas.device)
     #print(pt.shape)
     fields = _F.pad(pt, (0,1), "constant", 1).expand(p, n, -1, -1, -1, -1)
     fields = fields.unsqueeze(-2)
@@ -225,7 +220,7 @@ def masks_to_thetas(masks, margin=0.1):
     return _torch.stack(batch_thetas).squeeze(-3)
 
 def logits_to_thetas_2d( ps, q=0):
-    scale,ratio,angle,distort,tx,ty = ps.split([1,1,1,4,1,1],-1)
+    scale,ratio,angle,tx,ty,distort = ps.split([1,1,1,1,1,4],-1)
     tx,ty = tx, ty
     scale = scale.exp()
     ratio = ratio.exp()
@@ -241,12 +236,12 @@ def logits_to_thetas_2d( ps, q=0):
 logits_to_thetas = logits_to_thetas_2d
 
 def logits_to_thetas_3d( ps, q=0):
-    scale,ratio,angle,distort,t = ps.split([1,2,3,12,3],-1)
+    scale,ratio,angle,t,distort = ps.split([1,2,3,3,12],-1)
     scale = _torch.cat([scale,scale+ratio[...,[0]],scale+ratio[...,[1]]],-1)
     ratio = _torch.zeros_like(scale)
     dx,dy,sx,sy = distort.split(3,-1)
     tt = _torch.zeros_like(scale)#t.unsqueeze(-2) * _torch.eye(3,device=t.device)
-    ms = _torch.stack([scale, ratio, angle, dx, dy, sx, sy, tt, tt], -1)
+    ms = _torch.stack([scale, ratio, angle, tt, tt, dx, dy, sx, sy], -1)
     x,y,z = logits_to_thetas_2d(ms).unbind(-3)
     insert_row = lambda m, i: _torch.cat([m[...,:i,:], 
                                         _torch.zeros_like(m[...,[0],:]),
