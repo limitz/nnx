@@ -668,6 +668,16 @@ def voxel_shuffle(x, kernel_size):
     x = x.reshape(*s[:-4], -1, s[-3]*kernel_size,  *x.shape[-2:])  # [N...], Z, H, W
     return x
 
+def sample_shuffle(x, kernel_size):
+    x = x.unflatten(-2,(-1,kernel_size))
+    x = x.transpose(-1,-2).flatten(-2)
+    return x
+
+def sample_unshuffle(x, kernel_size):
+    x = x.unflatten(-1,(-1,kernel_size))
+    x = x.transpose(-1,-2).flatten(-3,-2)
+    return x
+
 def vector_length(x, dim=1, eps=1e-16):
     return x.mul(x).sum(dim, keepdim=True).add(eps).sqrt()
 

@@ -148,10 +148,19 @@ class PadCat(FxFunction): ...
 class PadStack(FxFunction): ...
 class VoxelShuffle(FxFunction):
     def __init__(self, *args, **kwargs):
-        super().__init__(self, *args, _attr="voxel_shuffle", **kwargs)
+        super().__init__(*args, _attr="voxel_shuffle", **kwargs)
 class VoxelUnshuffle(FxFunction):
     def __init__(self, *args, **kwargs):
-        super().__init__(self, *args, _attr="voxel_unshuffle", **kwargs)
+        super().__init__(*args, _attr="voxel_unshuffle", **kwargs)
+
+class SampleShuffle(FxFunction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, _attr="sample_shuffle", **kwargs)
+class SampleUnshuffle(FxFunction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, _attr="sample_unshuffle", **kwargs)
+
+
 class Norm(FxFunction): ...
 class Center(FxFunction): ...
 class Reduce(FxFunction): ...
