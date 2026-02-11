@@ -7,7 +7,7 @@ import matplotlib.pyplot as _plt
 from .. import functional as _Fx
 from . import text as _text
 
-def maze(size=(15,15)):
+def maze(size=(15,15), colorspace="idx"):
     if isinstance(size, int):
         size = (size-1, size-1)
     else:
@@ -58,4 +58,9 @@ def maze(size=(15,15)):
     target = challenge + ((target) * challenge)
     challenge[:,start[0]*2,start[1]*2] = 2
     challenge[:,end[0]*2,end[1]*2] = 2
-    return _text.color_to_rgb(_F.pad(challenge,(1,0,1,0))), _text.color_to_rgb(_F.pad(target,(1,0,1,0)))
+    challenge = _F.pad(challenge,(1,0,1,0))
+    target = _F.pad(target,(1,0,1,0))
+    if colorspace == "rgb":
+        return _text.idx_to_rgb(challenge), _text.idx_to_rgb(target)
+    else:
+        return challenge, target

@@ -7,7 +7,7 @@ import matplotlib.pyplot as _plt
 from .. import functional as _Fx
 from . import text as _text
 
-def sudoku(n=3, difficulty=0.4, font=_text.NUMERIC_5X3, spacing=(1,3), padding=1, device="cpu"):
+def sudoku(n=3, difficulty=0.4, font=_text.NUMERIC_5X3, spacing=(1,3), padding=1, device="cpu", colorspace="idx"):
     digits = {2:"1234",
               3:"123456789", 
               4:"0123456789ABCDEF",
@@ -52,10 +52,10 @@ def sudoku(n=3, difficulty=0.4, font=_text.NUMERIC_5X3, spacing=(1,3), padding=1
     rs = _F.pad(rs, padding)
     ts = _Fx.padcat(ts, -2)
     ts = _F.pad(ts, padding)
-    is_color = rs.gt(1).any() or rs.lt(0).any() or ts.gt(1).any() or ts.lt(0).any()
-    if is_color:
-        rs = _text.color_to_rgb(rs)
-        ts = _text.color_to_rgb(ts)
+    
+    if colorspace == "rgb":
+        rs = _text.idx_to_rgb(rs)
+        ts = _text.idx_to_rgb(ts)
         return rs.to(device), ts.to(device)
     else:
         return rs[None].to(device), ts[None].to(device)

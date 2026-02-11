@@ -15,7 +15,7 @@ COLORS = [[0.0, 0.0, 0.0], [0.8, 0.8, 0.8], [1.0, 0.2, 0.5],
            [1.0, 0.0, 0.0], [1.0, 0.5, 0.0], [0.5, 1.0, 0.0], [0.0, 1.0, 0.5], 
            [0.0, 0.5, 1.0], [0.0, 0.0, 1.0], [0.7, 0.0, 0.7], [0.2, 0.2, 0.2], [0.0, 0.0, 0.0]]
 
-def color_to_rgb(x):
+def idx_to_rgb(x):
     if isinstance(x,_np.ndarray):
         x = _torch.from_numpy(x)
     if x.dim() == 2: x = x[None]
@@ -267,7 +267,7 @@ def render_text_to(dst, text, font=DEFAULT, spacing=0, padding=1,
     assert False
     
 def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=80, 
-                device="cpu", **kwargs):
+                device="cpu",colorspace="idx", **kwargs):
     if not isinstance(spacing, (list, tuple)):
         spacing = [spacing] * 2
     if not isinstance(padding, (list, tuple)):
@@ -306,9 +306,8 @@ def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=80,
         rs = torch.zeros(1,1,device=device)
     rs = _F.pad(rs, padding, "constant", TRANSPARENT)
         
-    is_color= rs.gt(1).any() or rs.lt(0).any()
-    if is_color:
-        rs = color_to_rgb(rs)
+    if colorspace == "rgb":
+        rs = idx_to_rgb(rs)
         return rs
     else:
         return rs[None].float()
