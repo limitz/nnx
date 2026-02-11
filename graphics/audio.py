@@ -11,8 +11,17 @@ import os as _os
 import time as _time
 from .. import functional as _Fx
 
-def plot_audio(x, path=None, width=None, height=None, **kwargs):
-    path = path or _os.path.join("generated", str(_uuid.uuid1())+".mp4")
+def render_waveform(audio, height=256, pool=1):
+    p = _F.max_pool1d(audio, 2+pool, stride=pool, padding=1)
+    n = -_F.max_pool1d(audio, 2+pool, stride=pool, padding=1)
+    r = _torch.linspace(-1,1,height).unsqueeze(-1).expand(-1, p.shape[-1])
+    r = _torch.where(r.gt(n)&r.lt(p), _torch.ones_like(r), _torch.zeros_like(r))
+    return r
+        
+
+def plot_audio(x, path=None, width=None, height=None, encoding="mp4", **kwargs):
+    if path is None:
+        path = _os.path.join(_tempfile.gettempdir(), str(_uuid.uuid1()) + "." + encoding)
     save_audio(x, path, **kwargs)
     _ipy_display.display(
         _ipy_display.Audio(path))

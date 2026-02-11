@@ -23,6 +23,34 @@ class VideoDataset(_torch.utils.data.Dataset):
         return frame
 
 
+class CollateWithFallback:
+    def __init__(self, fallback="list"):
+        assert fallback in { "list" }
+        self.fallback = fallback
+
+    def __call__(self, xs):
+        assert len(xs) > 0
+        assert all(len(x) == len(xs[0]) for x in xs)
+        zs = zip(*xs)
+        rs = []
+        for z in zs:
+            if all(type(v) == type(z[0]) for v in z):
+                if isinstance(z[0], _torch.Tensor):
+                    if all(v.shape == z[0].shape for v in z):
+                        rs.append(_torch.stack(z))
+                        continue
+                elif isinstance(z[0], (int, float, complex, bool)):
+                    rs.append(_torch.tensor(list(z)))
+                    continue
+            
+            # fallback  
+            if self.fallback == "list":
+                rs.append(list(z))
+        
+        return tuple(rs)
+
+collate_with_list_fallback = default_collate = CollateWithFallback()
+
 class SkippableBatchSampler(_torch.utils.data.Sampler):
     def __init__(self, data_source, batch_size, skip=0):
         self.data_source = data_source

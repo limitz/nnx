@@ -2,7 +2,7 @@ import torch as _torch
 import torch.nn as _nn
 import torch.nn.functional as _F
 import torch.nn.functional as legacy
-from torch.nn.functional import *
+#from torch.nn.functional import *
 import cv2 as _cv2
 import math as _math
 
@@ -134,11 +134,7 @@ def broadcast_shape(input, ignore_dim=None):
         if vs != s: return None
     return s
 
-def interpolated_cat(input, size=None, dim=0):
-    assert isinstance(input, (list, tuple))
-    assert len(input) > 0
-    size = size or input[0].shape[dim]
-    ...
+
 
 def interpolate(input, size=None, scale_factor=None, mode="nearest", **kwargs):
     if -1 in size:
@@ -158,7 +154,7 @@ def interpolate(input, size=None, scale_factor=None, mode="nearest", **kwargs):
             r.append(y)
         return r
     if isinstance(input, (list, tuple)):
-        return torch.cat([interpolate(v.expand(1,*[-1]*(len(size)+1)), 
+        return _torch.cat([interpolate(v.expand(1,*[-1]*(len(size)+1)), 
                                         size, scale_factor, mode, **kwargs)
                             for v in input])
     if mode == "tricubic":
@@ -683,6 +679,17 @@ def vector_length(x, dim=1, eps=1e-16):
 
 def vector_norm(x, dim=1, eps=1e-16):
     return x / vector_length(x, eps=eps)
+
+def all_cosine_similarities(a,b, absolute=False):
+    assert a.dtype == b.dtype
+    if a.dtype in { _torch.cfloat, _torch.cdouble }:
+        if absolute: r = (a @ b.mT.conj()).abs()
+        else: r = (a @ b.mT.conj()).real
+        r = r / (a.abs().pow(2).sum(-1).unsqueeze(-1) * b.abs().pow(2).sum(-1).unsqueeze(-2)).sqrt()
+    else:
+        r = (a @ b.mT)
+        r = r / (a.pow(2).sum(-1).unsqueeze(-1) * b.pow(2).sum(-1).unsqueeze(-2)).sqrt()
+    return _torch.where(_torch.isnan(r), _torch.zeros_like(r), r) #_torch.nan_to_num(r)
 
 def guided_filter(x,guide=None,kernel_size=31,eps=1e-5):
     if guide is None: guide = x

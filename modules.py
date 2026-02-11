@@ -1,4 +1,5 @@
 import math as _math
+import copy as _copy
 import torch as _torch
 import torch.nn as _nn
 import torch.nn.functional as _F
@@ -41,6 +42,27 @@ class Skip(_nn.Sequential):
     def forward(self,x,r=None):
         r = r if r is not None else x
         return x + super().forward(r)
+
+class Lambda(_nn.Module):
+    def __init__(self, function, unsafe=False):
+        super().__init__()
+        self.function = function
+        self.unsafe = unsafe
+        
+    def forward(self, x):
+        f = self.function
+        if isinstance(f, str) and f.startswith("lambda"):
+            assert self.unsafe
+            f = eval(f)
+        assert callable(f)
+        return f(x)
+
+    def extra_repr(self):
+        r = repr(self.function)
+        if self.unsafe:
+            r = r + ", unsafe=True"
+        return r
+            
 class ModuleFunction(_nn.Module):
     def __init__(self, *args, _module=_torch, _attr=None, _dereference=False, _postprocess=None,
                  **kwargs):
@@ -107,6 +129,8 @@ class Reshape(TensorFunction): ...
 class Abs(TensorFunction): ...
 class Neg(TensorFunction): ...
 class Conj(TensorFunction): ...
+class Real(TensorFunction): ...
+class Imag(TensorFunction): ...
 class Angle(TensorFunction): ...
 class Sum(TensorFunction): ...
 class Mean(TensorFunction): ...
@@ -134,12 +158,6 @@ class Min(TensorFunction):
 class MT(TensorFunction):
     def __init__(self):
         super().__init__(_attr="mT")
-class Real(TensorFunction):
-    def __init__(self):
-        super().__init__(_attr="real")
-class Imag(TensorFunction): 
-    def __init__(self):
-        super().__init__(_attr="imag")
 class GreaterThan(TensorFunction):
     def __init__(self):
         super().__init__(_attr="gt")
@@ -237,9 +255,14 @@ class ZerosLike(_nn.Module):
         return _torch.zeros_like(x)
 
 class Loop(_nn.Sequential):
-    def __init__(self, *args, n=0):
-        super().__init__(*args)
-        self.n = n
+    def __init__(self, *args, n=1, copy=False):
+        if copy:
+            block = _nn.Sequential(*args)
+            super().__init__(*[_copy.deepcopy(block) for _ in range(n)])
+            self.n = 1
+        else:
+            super().__init__(*args)
+            self.n = n
     
     def forward(self, x):
         for _ in range(self.n):    
@@ -285,6 +308,16 @@ class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
             
         return super().forward(pred, target)
 
+class Sequential(_nn.Sequential):
+    def __init__(self, *args):
+        super().__init__(*args)
+
+    def forward(self, *args, **kwargs):
+        for i, layer in enumerate(self):
+            if i == 0: x = layer(*args, **kwargs)
+            else: x = layer(x)
+        return x
+        
 class Affine(_nn.Module):
     def __init__(self, channels):
         super().__init__()
@@ -293,8 +326,8 @@ class Affine(_nn.Module):
         self.bias = _nn.parameter.Parameter(_torch.randn(channels))
 
     def forward(self, x):
-        w = self.weight.view(self.channels, [1] * (x.dim()-2))
-        b = self.bias.view(self.channels, [1]*(x.dim()-2))
+        w = self.weight.view(self.channels, *[1 for _ in range(x.dim()-2)])
+        b = self.bias.view(self.channels, *[1 for _ in range(x.dim()-2)])
         return x * w + b
 
 class Trainer(_nn.Module):
