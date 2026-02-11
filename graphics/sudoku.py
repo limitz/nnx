@@ -7,7 +7,7 @@ import matplotlib.pyplot as _plt
 from .. import functional as _Fx
 from . import text as _text
 
-def sudoku(n=3, difficulty=0.4, font=_text.NUMERIC_5X3, spacing=(1,3), padding=1, device="cpu", colorspace="idx"):
+def render_sudoku(n=3, difficulty=0.4, font=_text.NUMERIC_5X3, spacing=(1,3), padding=1, device="cpu", colorspace="idx"):
     digits = {2:"1234",
               3:"123456789", 
               4:"0123456789ABCDEF",
