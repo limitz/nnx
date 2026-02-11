@@ -6,24 +6,24 @@ import math as _math
 import matplotlib.pyplot as _plt
 from .. import functional as _Fx
 
-NUM_COLORS = 12
-TRANSPARENT = (0)
+TRANSPARENT = 0
 assert TRANSPARENT == 0 # for now, render_text assumes it
 
-INVALID = (NUM_COLORS-1)
-COLORS = [[0.0, 0.0, 0.0], [0.8, 0.8, 0.8], [1.0, 0.2, 0.5], 
-           [1.0, 0.0, 0.0], [1.0, 0.5, 0.0], [0.5, 1.0, 0.0], [0.0, 1.0, 0.5], 
-           [0.0, 0.5, 1.0], [0.0, 0.0, 1.0], [0.7, 0.0, 0.7], [0.2, 0.2, 0.2], [0.0, 0.0, 0.0]]
+DEFAULT_PALETTE = _torch.tensor(
+    [[0.0, 0.0, 0.0], [0.8, 0.8, 0.8], [1.0, 0.2, 0.5], [1.0, 0.0, 0.0], 
+     [1.0, 0.5, 0.0], [0.5, 1.0, 0.0], [0.0, 1.0, 0.5], [0.0, 0.5, 1.0], 
+     [0.0, 0.0, 1.0], [0.7, 0.0, 0.7], [0.2, 0.2, 0.2], [0.0, 0.0, 0.0]])
 
-def idx_to_rgb(x):
+def palette_to_rgb(x, palette=DEFAULT_PALETTE):
     if isinstance(x,_np.ndarray):
         x = _torch.from_numpy(x)
     if x.dim() == 2: x = x[None]
-    x = _F.one_hot(x, NUM_COLORS).float().squeeze(-4)
-    x = x @ _torch.tensor(COLORS, device=x.device) #colors(x.device)
+    x = _F.one_hot(x, len(palette)).float().squeeze(-4)
+    x = x @ palette.to(x.device) #colors(x.device)
     x = x.transpose(-1,-3)
     x = x.transpose(-1,-2)
     return x
+
     
 NUMERIC_5X3 = {
     '0': [[1, 1, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 1, 1]],
@@ -267,7 +267,7 @@ def render_text_to(dst, text, font=DEFAULT, spacing=0, padding=1,
     assert False
     
 def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=80, 
-                device="cpu",colorspace="idx", **kwargs):
+                device="cpu",colorspace="palette", **kwargs):
     if not isinstance(spacing, (list, tuple)):
         spacing = [spacing] * 2
     if not isinstance(padding, (list, tuple)):
@@ -307,7 +307,7 @@ def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=80,
     rs = _F.pad(rs, padding, "constant", TRANSPARENT)
         
     if colorspace == "rgb":
-        rs = idx_to_rgb(rs)
+        rs = palette_to_rgb(rs[None])
         return rs
     else:
         return rs[None].float()
