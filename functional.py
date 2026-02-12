@@ -272,7 +272,12 @@ def center(x, dim=None):
     return x.sub(x.mean(dim,keepdim=True))
 
 def n_between(a,b,n=(),inclusive=True):
-    if isinstance(a, float) or isinstance(b, float):
+    if isinstance(a, (tuple, list)):
+        assert isinstance(b, (tuple, list))
+        assert len(a) == len(b)
+        r = tuple(n_between(va,vb,n,inclusive) for va,vb in zip(a,b))
+        return r
+    elif isinstance(a, float) or isinstance(b, float):
         r = _torch.rand(n) * (b-a) + a
     else:
         b = (b+1) if inclusive else b
