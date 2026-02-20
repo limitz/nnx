@@ -38,6 +38,15 @@ def rgb8(image, **kwargs):
     assert "dtype" not in kwargs
     return rgb(image, dtype=_torch.uint8, **kwargs) 
 
+def alpha_blend_2d(dst, src):
+    n,c,*_ = dst.shape
+    if c == 3:
+        dst = _F.pad(dst, [0,0,0,0,0,1], "constant", 1)
+        
+    alpha = src[:,-1:]
+    dst = dst * (1-alpha) + src * alpha
+    return dst[:,:c]
+
 def alpha_blend_3d(image, blend_dim=-3):
     assert image.dim() >= 4
     d = image.unbind(blend_dim)
@@ -49,7 +58,6 @@ def alpha_blend_3d(image, blend_dim=-3):
             alpha = plane
         r = r * (1-alpha) + plane * alpha
     return r
-    
        
 def save(image, path, **kwargs):
     v = rgb8(image, **kwargs)

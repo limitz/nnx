@@ -97,6 +97,11 @@ def pad_to(input, size, mode="center", *args, **kwargs):
 
 crop_to = pad_to
 
+def all_in_set(a,b, allow_empty=True, allow_none=True):
+    if a is None: return allow_none
+    if len(a) == 0: return allow_empty
+    return all(v in b for v in a)
+    
 def padstack(tensors, dim=0, pad_mode="constant", pad_value=0):
     assert len(tensors) > 0
     ndims = tensors[0].dim()
@@ -114,6 +119,12 @@ def padcat(tensors, dim=0, pad_mode="constant", pad_value=0):
     new_shape = [max([t.shape[d] for t in tensors]) if d != dim else -1 for d in range(ndims)]
     padding = [[new_shape[d//2] - t.shape[d//2] if (d & 1 and d//2 != dim) else 0 for d in range(ndims*2,0,-1)] for t in tensors]
     return _torch.cat([_F.pad(t,p,pad_mode,pad_value) for t,p in zip(tensors,padding)], dim=dim)
+
+def all_combinations(*args):
+    assert len(args)
+    if len(args) == 1: return [[a] for a in args[0]]
+    else: return [a + b for a in all_combinations(*args[:len(args)//2]) for b in all_combinations(*args[len(args)//2:])]
+
 
 def broadcast_shape(input, ignore_dim=None):
     assert isinstance(input, (list, tuple))
@@ -271,11 +282,11 @@ def norm(x, dim=None, eps=1e-8):
 def center(x, dim=None):
     return x.sub(x.mean(dim,keepdim=True))
 
-def n_between(a,b,n=(),inclusive=True):
+def sample_between(a,b,n=(),inclusive=True):
     if isinstance(a, (tuple, list)):
         assert isinstance(b, (tuple, list))
         assert len(a) == len(b)
-        r = tuple(n_between(va,vb,n,inclusive) for va,vb in zip(a,b))
+        r = tuple(sample_between(va,vb,n,inclusive) for va,vb in zip(a,b))
         return r
     elif isinstance(a, float) or isinstance(b, float):
         r = _torch.rand(n) * (b-a) + a
@@ -284,12 +295,22 @@ def n_between(a,b,n=(),inclusive=True):
         n = n if isinstance(n, (tuple, list)) else (n,)
         r = _torch.randint(a,b,n)
     return r.item() if r.dim() == 0 else r
-    
-between = n_between
 
-
+def is_between(v,a,b,inclusive=True):
+    if isinstance(a, (tuple, list)):
+        assert isinstance(b, (tuple, list))
+        assert isinstance(v, (tuple, list))
+        assert len(a) == len(b)
+        assert len(a) == len(v)
+        r = tuple(is_between(vv,va,vb,inclusive) for vv,va,vb in zip(v,a,b))
+        return all(r)
+    elif inclusive:
+        return v>=a and v<=b
+    else:
+        return v>=a and v<b
+        
 def constant_or_between(v,a,b,n): 
-    return n_between(a,b,n) if v is None else v
+    return sample_between(a,b,n) if v is None else v
 
 def random_clipping_mask_3d(shape, strength=.25, device="cpu"):
     s = strength

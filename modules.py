@@ -122,6 +122,7 @@ class TensorFunction(_nn.Module):
             r += ", ".join([str(k) + "=" + str(v) for k,v in self.kwargs.items()])
         return r
     
+class Select(TensorFunction): ...
 class Permute(TensorFunction): ...
 class Transpose(TensorFunction): ...
 class View(TensorFunction): ...
@@ -268,8 +269,130 @@ class Loop(_nn.Sequential):
         for _ in range(self.n):    
             x = super().forward(x)
         return x
-        
 
+class FuzzyConv2d(_nn.Module):
+    def __init__(self, in_features, out_features, kernel_size, 
+                 noise_level=3e-2, noise_reference="none", bypass=False, 
+                 **kwargs):
+        super().__init__()
+        assert noise_reference in { "none", "std", "mean", "max", "abs" }
+        assert "padding_mode" not in kwargs or kwargs["padding_mode"] == "zeros"
+        self.noise_reference = noise_reference
+        self.noise_level = noise_level
+        self.bypass = bypass
+        self.body = _nn.Conv2d(in_features, out_features, kernel_size, **kwargs)
+        self.kwargs = kwargs
+
+    #def __getattribute__(self, name):
+    #    if name in { "weight", "stride", "bias","dilation", "padding", "kernel_size", "in_features", "out_features", "padding_mode", "weight_fake_quant" }:
+    #        return getattr(self.body, name)
+    #    else:
+    #        return super().__getattribute__(name)
+            
+    def forward(self, x):
+        if self.bypass: return self.body(x)
+        if hasattr(self.body, "weight_fake_quant"):
+            w = self.body.weight_fake_quant(self.body.weight)
+        else:
+            w = self.body.weight
+        if self.noise_reference == "none":
+            w = w + _torch.randn_like(w) * self.noise_level
+        elif self.noise_reference == "std":
+            w = w + _torch.randn_like(w) * w.std() * self.noise_level
+        elif self.noise_reference == "mean":
+            w = w + _torch.randn_like(w) * w.mean() * self.noise_level
+        elif self.noise_reference == "max":
+            w = w + _torch.randn_like(w) * w.max() * self.noise_level
+        elif self.noise_reference == "abs":
+            w = w + _torch.randn_like(w) * w.abs() * self.noise_level
+        else:
+            assert False, "invalid noise reference"
+        b = self.body.bias
+        return _F.conv2d(x, w, b, 
+                        stride=self.body.stride, 
+                        padding=self.body.padding, 
+                        groups=self.body.groups,
+                        dilation=self.body.dilation)
+
+class AdaptiveBoxBlurNd(_nn.Module):
+    def __init__(self, kernel_sizes=None, channel_dim=1):
+        super().__init__()
+        assert channel_dim != 0
+        self.channel_dim = channel_dim
+        self.flows = None
+        self.signs = None
+        self.update_kernel_sizes(kernel_sizes)
+            
+    @staticmethod
+    def _calculate_flows(k):
+        dimensions = len(k.shape)-2
+        assert k.shape[-1] == dimensions
+        corners = _Fx.all_combinations(*[[-1,1]]*dimensions)
+        corners = _torch.tensor(corners, device=k.device)
+        grid = []
+        flow = []
+        for d in range(dimensions):
+            s = k.shape[-d-2]
+            i = [None]*dimensions
+            i[-d-1] = slice(0,s)
+            g = _torch.linspace(-1,1,s, device=k.device)[tuple(i)]
+            g = g.expand_as(k[...,0])
+            g = g - 1/s
+            grid.append(g)
+            flow.append(k[...,d]/s)
+        grid = _torch.stack(grid, -1)
+        flow = _torch.stack(flow, -1)
+        flows = []
+        for c in corners:
+            f = grid + c * flow 
+            flows.append(f)
+        signs = corners.prod(-1)
+        return flows, signs
+    
+    @staticmethod
+    def _window_mean(x, flows, signs, areas, channel_dim=-1, 
+                         padding_mode="reflection", eps=1e-5):
+    
+        assert channel_dim != 0
+        
+        if channel_dim < 0: channel_dim = x.dim() + channel_dim
+        excl_channel_dim = (i for i in range(x.dim()) if i != channel_dim)
+        excl_channel_dim = tuple(excl_channel_dim)
+        mean = x.mean(excl_channel_dim, keepdim=True)
+        std = x.std(excl_channel_dim, keepdim=True)
+        x = x.sub(mean).div(std.add(eps))
+        for d in excl_channel_dim[1:]:
+            x = x.cumsum(d)
+        
+        s = 0
+        if channel_dim != 1:
+            to_channels_first = (0,channel_dim) + excl_channel_dim[1:]
+            x = x.permute(*to_channels_first)
+        for f,sign in zip(flows, signs):
+            s += sign * _F.grid_sample(x, f, padding_mode=padding_mode, 
+                                      align_corners=True)
+        if channel_dim != 1:
+            to_channels_orig = (to_channels_first.index(i) 
+                                for i in range(x.dim()))
+            s = s.permute(*to_channels_orig)
+        
+        return s.div(areas.add(eps)).mul(std).add(mean)
+    
+    def update_kernel_sizes(self, kernel_sizes):
+        if kernel_sizes is not None:
+            self.flows, self.signs = self._calculate_flows(kernel_sizes)
+            self.kernel_sizes = kernel_sizes
+    
+    def forward(self, x, kernel_sizes=None):
+        self.update_kernel_sizes(kernel_sizes)
+        assert self.flows is not None
+        assert self.signs is not None
+        areas = self.kernel_sizes.prod(-1).unsqueeze(self.channel_dim)
+        return self._window_mean(x, self.flows, self.signs, areas, 
+                                 channel_dim=self.channel_dim)
+
+
+        
 class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
     def __init__(self, num_classes, betas=(0.9, 0.999, 0.99), *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -386,6 +509,18 @@ class CompoundLoss(_nn.ModuleList):
         else:
             return r
 
+class TanhL1Loss(_nn.Module):
+    def __init__(self, tau=3, reduction="mean"):
+        super().__init__()
+        self.tau = tau
+        self.reduction = reduction
+
+    def forward(self, pred, target):
+        assert pred.shape == target.shape
+        loss = pred - target
+        loss =  loss.mul(self.tau).tanh() * loss
+        return _Fx.reduce(loss, self.reduction)
+        
 class GradientMSELoss(_nn.Module):
     def __init__(self, dim=None, spacing=1, edge_order=1, reduction="mean", keepdim=False):
         super().__init__()
@@ -594,9 +729,12 @@ class Between:
         self.n = n
         self.inclusive = inclusive
     
-    def __call__(self):
+    def __call__(self,test=None):
         a = self.a() if callable(self.a) else self.a
         b = self.b() if callable(self.b) else self.b
         n = self.n() if callable(self.n) else self.n
-        return _Fx.n_between(a, b, n, self.inclusive)
+        if test is not None:
+            return _Fx.is_between(test, a, b, self.inclusive)
+        else:
+            return _Fx.sample_between(a, b, n, self.inclusive)
         

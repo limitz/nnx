@@ -15,8 +15,8 @@ def render_random_pattern(size, pattern_size=_nnx.Between((2,2),(5,5)), num_colo
     if callable(num_colors): num_colors = num_colors()
     pattern = (_torch.randperm(_np.prod(pattern_size)) % num_colors).view(pattern_size)
     if roll:
-        roll_dim = _Fx.n_between(0,1)
-        roll_val = _Fx.n_between(0,pattern_size[roll_dim]-1)
+        roll_dim = _Fx.sample_between(0,1)
+        roll_val = _Fx.sample_between(0,pattern_size[roll_dim]-1)
 
     
     r = pattern.repeat(

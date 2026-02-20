@@ -1,9 +1,32 @@
 import torch as _torch
 import torchvision as _torchvision
-
+import glob as _glob
 from .widerface import WIDERface as WIDERface
 from .random import RandomNd as RandomNd
+from .. import functional as _Fx
 
+class ImageDataset(_torch.utils.data.Dataset):
+    def __init__(self, pattern, target_types=None, transform=None):
+        assert _Fx.all_in_set(target_types, {"index", "path"}) 
+        self.paths = sorted(_glob.glob(pattern, recursive=True))
+        self.target_types = target_types or []
+        self.transform = transform
+        
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, idx):
+        path = self.paths[idx]
+        image = _torchvision.io.read_image(path) / 255
+        if self.transform is not None:
+            image = self.transform(image)
+        r = [image]
+        if "index" in self.target_types:
+            r.append(idx)
+        if "path" in self.target_types:
+            r.append(path)
+        return r[0] if len(r) == 1 else tuple(r)
+        
 class VideoDataset(_torch.utils.data.Dataset):
     def __init__(self, path, start=0, length=10, transform=None):
         self.transform = transform

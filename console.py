@@ -50,7 +50,22 @@ class EMA:
         title = (self.title + " ") if self.title is not None else "" 
         r = self.style.format(mean=self.mean, std=self.std, title=title)
         return r
-            
+
+class Spinner:
+    def __init__(self, style=["   ",".  ", ".. ", "..."]):    
+        self.style = style
+        self.idx = 0
+
+    def __str__(self):
+        r = strip(self.__style_str__())
+        return r
+    
+    def __style_str__(self, style=None):
+        r = self.style[self.idx]
+        self.idx += 1
+        self.idx %= len(self.style)
+        return r
+        
 class Timer:
     def __init__(self, style="<green>[<b>{time_str}</b><green>:{seconds}]</>"):
         self.style = style
