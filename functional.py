@@ -4,7 +4,9 @@ import torch.nn.functional as _F
 import torch.nn.functional as legacy
 #from torch.nn.functional import *
 import cv2 as _cv2
+import os as _os
 import math as _math
+import glob as _glob
 
 def guess_device(x, default=_torch.device("cpu")):
     if isinstance(x, _torch.Tensor): return x.device
@@ -740,3 +742,27 @@ def guided_filter(x,guide=None,kernel_size=31,eps=1e-5):
     b = pool(b, k) / (k*k)
     q = (a * g + b)
     return q
+
+def glob(*args, sort_by="name", **kwargs):
+    if sort_by is not None:
+        sort_by = sort_by.split(" ")
+        assert all_in_set(sort_by, {"name", 
+                                    "filename",
+                                    "path",
+                                    "modified",
+                                    "modification",
+                                    "time", 
+                                    "size",
+                                    "filesize",
+                                    "desc", "descending", 
+                                    "asc", "ascending" })
+        
+    r = _glob.glob(*args, **kwargs)
+    reverse = any(s in {"desc","descending"} for s in sort_by)
+    if any(s in { "name", "filename", "path" } for s in sort_by):
+        r = sorted(r, reverse=reverse)
+    elif any(s in { "size", "filesize" } for s in sort_by):
+        r = sorted(r, key=_os.path.getsize, reverse=reverse)
+    elif any(s in { "modified", "modification", "time" } for s in sort_by):
+        r = sorted(r, key=_os.path.getmtime, reverse=reverse)
+    return r
