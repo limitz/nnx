@@ -743,10 +743,12 @@ def guided_filter(x,guide=None,kernel_size=31,eps=1e-5):
     q = (a * g + b)
     return q
 
-def glob(*args, sort_by="name", **kwargs):
-    if sort_by is not None:
-        sort_by = sort_by.split(" ")
-        assert all_in_set(sort_by, {"name", 
+def glob(*args, order_by="name", **kwargs):
+    r = _glob.glob(*args, **kwargs)
+    
+    if order_by is not None:
+        order_by = order_by.split(" ")
+        assert all_in_set(order_by, {"name", 
                                     "filename",
                                     "path",
                                     "modified",
@@ -757,12 +759,11 @@ def glob(*args, sort_by="name", **kwargs):
                                     "desc", "descending", 
                                     "asc", "ascending" })
         
-    r = _glob.glob(*args, **kwargs)
-    reverse = any(s in {"desc","descending"} for s in sort_by)
-    if any(s in { "name", "filename", "path" } for s in sort_by):
-        r = sorted(r, reverse=reverse)
-    elif any(s in { "size", "filesize" } for s in sort_by):
-        r = sorted(r, key=_os.path.getsize, reverse=reverse)
-    elif any(s in { "modified", "modification", "time" } for s in sort_by):
-        r = sorted(r, key=_os.path.getmtime, reverse=reverse)
+        reverse = any(s in {"desc","descending"} for s in order_by)
+        if any(s in { "name", "filename", "path" } for s in order_by):
+            r = sorted(r, reverse=reverse)
+        elif any(s in { "size", "filesize" } for s in order_by):
+            r = sorted(r, key=_os.path.getsize, reverse=reverse)
+        elif any(s in { "modified", "modification", "time" } for s in order_by):
+            r = sorted(r, key=_os.path.getmtime, reverse=reverse)
     return r
