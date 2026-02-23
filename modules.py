@@ -722,6 +722,21 @@ class Pop(StackAccess):
             r = r + "unsafe=True"
         return r
 
+
+class RecurrentBatchNorm2d(_nn.Module):
+    def __init__(self, n, *args, **kwargs):
+        super().__init__()
+        self.inner = _nn.ModuleList([_nn.BatchNorm2d(*args, **kwargs) for _ in range(n)])
+        self.cursor = 0
+
+    def reset(self):
+        self.cursor = 0
+
+    def forward(self, x):
+        r = self.inner[self.cursor](x)
+        self.cursor += 1
+        return r
+        
 class Between:
     def __init__(self, a, b, n=(), inclusive=True):
         self.a = a
