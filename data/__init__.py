@@ -46,7 +46,7 @@ class VideoDataset(_torch.utils.data.Dataset):
         return frame
 
 
-class ZipDataset(torch.utils.data.Dataset):
+class ZipDataset(_torch.utils.data.Dataset):
     def __init__(self, *datasets):
         self.datasets = datasets
         
@@ -56,7 +56,7 @@ class ZipDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return tuple(d[idx] for d in self.datasets)
 
-class WindowDataset(torch.utils.data.Dataset):
+class WindowDataset(_torch.utils.data.Dataset):
     def __init__(self, dataset, radius=2, collate_dim=0):
         self.dataset = dataset
         self.radius = radius
@@ -71,9 +71,9 @@ class WindowDataset(torch.utils.data.Dataset):
             r.append(self.dataset[i])
         
         if self.collate_dim is None:
-            return torch.stack(r)
+            return _torch.stack(r)
         else:
-            return torch.cat(r, self.collate_dim)
+            return _torch.cat(r, self.collate_dim)
    
 class CollateWithFallback:
     def __init__(self, fallback="list"):
