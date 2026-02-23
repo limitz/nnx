@@ -7,7 +7,7 @@ import matplotlib.pyplot as _plt
 from .. import functional as _Fx
 from . import text as _text
 
-def render_maze(size=(15,15), colorspace="palette"):
+def render_maze(size=(16,16), colorspace="palette"):
     if callable(size): size = size()
     if isinstance(size, int):
         size = (size-1, size-1)
