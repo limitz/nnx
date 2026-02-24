@@ -56,25 +56,6 @@ class ZipDataset(_torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return tuple(d[idx] for d in self.datasets)
 
-class WindowDataset(_torch.utils.data.Dataset):
-    def __init__(self, dataset, radius=2, collate_dim=0):
-        self.dataset = dataset
-        self.radius = radius
-        self.collate_dim = collate_dim
-        
-    def __len__(self):
-        return max(0, (len(self.dataset) - 2 * self.radius))
-
-    def __getitem__(self, idx):
-        r = []
-        for i in range(idx, idx+2*self.radius+1):
-            r.append(self.dataset[i])
-        
-        if self.collate_dim is None:
-            return _torch.stack(r)
-        else:
-            return _torch.cat(r, self.collate_dim)
-   
 class CollateWithFallback:
     def __init__(self, fallback="list"):
         assert fallback in { "list" }
@@ -103,6 +84,25 @@ class CollateWithFallback:
 
 collate_with_list_fallback = default_collate = CollateWithFallback()
 
+
+class WindowDataset(_torch.utils.data.Dataset):
+    def __init__(self, dataset, radius=2, collate_fn=collate_with_list_fallback):
+        self.dataset = dataset
+        self.radius = radius
+        self.collate_fn = collate_fn
+        
+    def __len__(self):
+        return max(0, (len(self.dataset) - 2 * self.radius))
+
+    def __getitem__(self, idx):
+        rs = []
+        for i in range(idx, idx+2*self.radius+1):
+            r = self.dataset[i]  
+            rs.append(r)
+        
+        rs = self.collate_fn(rs)
+        return rs
+        
 class SkippableBatchSampler(_torch.utils.data.Sampler):
     def __init__(self, data_source, batch_size, skip=0):
         self.data_source = data_source
