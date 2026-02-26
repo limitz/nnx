@@ -299,6 +299,8 @@ def sample_between(a,b,n=(),inclusive=True):
         r = _torch.randint(a,b,n)
     return r.item() if r.dim() == 0 else r
 
+between = sample_between
+
 def is_between(v,a,b,inclusive=True):
     if isinstance(a, (tuple, list)):
         assert isinstance(b, (tuple, list))
@@ -311,7 +313,7 @@ def is_between(v,a,b,inclusive=True):
         return v>=a and v<=b
     else:
         return v>=a and v<b
-        
+      
 def constant_or_between(v,a,b,n): 
     return sample_between(a,b,n) if v is None else v
 
