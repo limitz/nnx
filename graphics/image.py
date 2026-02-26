@@ -20,10 +20,13 @@ def rgb(image, dtype=_torch.float, **kwargs):
     #else:
     #    image = _Fx.tensor(image)
     assert dtype in {_torch.float, _torch.uint8}
+    if image.dtype in {_torch.cfloat, _torch.cdouble}:
+        image = _torch.cat([image.real, image.imag], -3)
+        image = _color.feature_to_rgb(image, **kwargs)
     if image.shape[-3] == 1:
         image = _torch.cat([image]*3, -3)
     elif image.shape[-3] == 2:
-        image = _torch.cat([image]*2 + [_torch.full_like(image, 0.5)], -3)
+        image = _torch.cat([image] + [_torch.full_like(image, 0.5)], -3)
     elif image.shape[-3] > 3:
         image = _color.feature_to_rgb(image, **kwargs)
         image = image.clamp(0,1)
