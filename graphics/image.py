@@ -21,8 +21,17 @@ def rgb(image, dtype=_torch.float, **kwargs):
     #    image = _Fx.tensor(image)
     assert dtype in {_torch.float, _torch.uint8}
     if image.dtype in {_torch.cfloat, _torch.cdouble}:
-        image = _torch.cat([image.real, image.imag], -3)
-        image = _color.feature_to_rgb(image, **kwargs)
+        if image.shape[-3] == 1:
+            norm = kwargs.get("norm")
+            if norm == "std_mean":
+                image = _Fx.norm(image) / 2
+            elif norm == "center":
+                image = image - image.mean()
+            image = _torch.cat([image.abs() * 0.7, image.real, image.imag], -3)
+            image = _color.yuv_to_rgb(image, **kwargs)
+        else:
+            image = _torch.cat([image.real, image.imag], -3)
+            image = _color.feature_to_rgb(image, **kwargs)
     if image.shape[-3] == 1:
         image = _torch.cat([image]*3, -3)
     elif image.shape[-3] == 2:
