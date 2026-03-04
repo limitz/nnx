@@ -1,9 +1,25 @@
 import torch as _torch
 import torchvision as _torchvision
+import os as _os
 import glob as _glob
+import tifffile as _tifffile
 from .widerface import WIDERface as WIDERface
 from .random import RandomNd as RandomNd
 from .. import functional as _Fx
+
+class DatasetProxyWithIndex(_torch.utils.data.Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+    
+    def __len__(self):
+        return len(self.dataset)
+        
+    def __getitem__(self, idx):
+        r = self.dataset[idx]
+        if isinstance(r, (list, tuple)):
+            return (*r, idx)
+        else:
+            return r, idx
 
 class ImageDataset(_torch.utils.data.Dataset):
     def __init__(self, pattern, target_types=None, transform=None):
@@ -17,7 +33,16 @@ class ImageDataset(_torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         path = self.paths[idx]
-        image = _torchvision.io.read_image(path) / 255
+        _, ext = _os.path.splitext(path)
+        if ext == ".tiff":
+            image = _tifffile.imread(path)
+            image = _torch.from_numpy(image).permute(-1,0,1)
+            if image.dtype == _torch.uint16:
+                image = image / ((1<<16)-1)
+            elif image.dtype == _torch.uint8:
+                image = image / ((1<<8)-1)
+        else:
+            image = _torchvision.io.read_image(path) / 255
         if self.transform is not None:
             image = self.transform(image)
         r = [image]

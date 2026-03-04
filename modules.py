@@ -722,7 +722,43 @@ class Pop(StackAccess):
             r = r + "unsafe=True"
         return r
 
+class ReLUPow(_nn.Module):
+    def __init__(self, gamma=1.0, delta=0.0):
+        super().__init__()
+        self.register_buffer("gamma", _Fx.tensor(gamma))
+        self.register_buffer("delta", _Fx.tensor(delta))
+        
+    def forward(self,x):
+        return x.add(self.delta).relu().pow(self.gamma).sub(self.delta.pow(2))
 
+
+class Gate(_nn.Module):
+    def __init__(self, dim=-1, nonlinearity=_nn.Sigmoid):
+        super().__init__()
+        self.dim = dim
+        self.nonlinearity = nonlinearity()
+
+    def forward(self, x):
+        a,b = x.chunk(2, self.dim)
+        return a * self.nonlinearity(b)
+
+class ELUPow(_nn.Module):
+    def __init__(self, gamma=1.0, alpha=1.0):
+        super().__init__()
+        self.register_buffer("gamma", _Fx.tensor(gamma))
+        self.register_buffer("alpha", _Fx.tensor(alpha))
+
+    def forward(self, x):
+        return _torch.where(x>0, x.add(1).pow(self.gamma).sub(1), self.alpha * (x.exp().sub(1)))
+
+class ReLUSquared(ReLUPow):
+    def __init__(self, alpha=1.0):
+        super().__init__(self, 2.0, alpha)
+        
+class ELUSquared(ELUPow):
+    def __init__(self, alpha=1.0):
+        super().__init__(self, 2.0, alpha)
+        
 class RecurrentBatchNorm2d(_nn.Module):
     def __init__(self, n, *args, **kwargs):
         super().__init__()

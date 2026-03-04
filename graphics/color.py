@@ -17,7 +17,7 @@ def n_colors(n, channels=3):
 def n_colors_u8(n, channels=3):
     return _torch.stack([nth_color_u8(i, n, channels) for i in range(n)])
 
-def rgb_to_yuv(rgb, clamp=True):
+def rgb_to_yuv(rgb, clamp=True, **kwargs):
     if rgb.dtype == _torch.uint8: 
         rgb = rgb / 255
     m = _torch.tensor([
@@ -32,7 +32,7 @@ def rgb_to_yuv(rgb, clamp=True):
         yuv.select(-3, 2).clamp_(-1,1)
     return yuv
 
-def yuv_to_rgb(yuv, clamp=True):
+def yuv_to_rgb(yuv, clamp=True, **kwargs):
     m = _torch.tensor([
         [1, 0.00000, 1.28033],
         [1,-0.21482,-0.38059],
@@ -41,7 +41,7 @@ def yuv_to_rgb(yuv, clamp=True):
     rgb = (yuv.transpose(-3,-1) @ m.mT).transpose(-3,-1).contiguous()
     return rgb.clamp(0,1) if clamp else rgb
 
-def feature_to_yuv(v, norm="std_mean", scale=None, rotations=1):
+def feature_to_yuv(v, norm="std_mean", scale=None, rotations=1, **kwargs):
     c = v.shape[-3]
     scale = scale or 0.6
     z = _torch.polar(

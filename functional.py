@@ -746,15 +746,16 @@ def guided_filter(x,guide=None,kernel_size=31,eps=1e-5):
     q = (a * g + b)
     return q
 
-def positional_encoding(num, dim, shape=None, n=10000, device="cpu"):
-    i = _torch.arange(0, dim//2, device=device)
+def positional_encoding(num, dim, shape=None, n=10000, p=2, device="cpu"):
+    i = _torch.arange(0, dim//p, device=device)
     s = _np.prod(shape) if shape is not None else 1
-    div_term = _torch.exp(-_np.log(n) * (2*i/dim))
+    div_term = _torch.exp(-_np.log(n) * (i/dim))
     position = _torch.arange(s*num, device=device).unsqueeze(1)
  
     pe = _torch.zeros(s*num, dim, device=device)
-    pe[:, 0::2] = _torch.sin(position * div_term)
-    pe[:, 1::2] = _torch.cos(position * div_term)
+    for pp in range(p):
+        pe[:, pp::p] = _torch.sin(position * div_term + (pp * 2 * _math.pi / p))
+    
     if shape is not None:
         pe = pe.unflatten(0, (num, *shape))
         pe = pe.permute(0, -1, *[v+1 for v in range(len(shape))])
