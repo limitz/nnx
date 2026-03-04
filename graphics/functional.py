@@ -5,6 +5,15 @@ import cv2 as _cv2
 import math as _math
 from .. import functional as _Fx
 
+def border(x, color=(1,1,1.), thickness=1, inplace=False):
+    color = _Fx.tensor(color).unflatten(-1,(-1,1))
+    t = thickness
+    mask = _torch.ones(x.shape[-2:], device=x.device, dtype=_torch.bool)
+    mask[..., t:-t,t:-t] = 0
+    if not inplace: x = x.clone()
+    x[...,mask] = color
+    return x
+    
 def inner_edge(x, threshold=0.5, background=None, thickness=1):
     if threshold is not None:
         m0 = x.gt(threshold).float()
