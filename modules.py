@@ -351,32 +351,32 @@ class AdaptiveBoxBlurNd(_nn.Module):
     
     @staticmethod
     def _window_mean(x, flows, signs, areas, channel_dim=-1, 
-                         padding_mode="reflection", eps=1e-5):
+                         padding_mode="border", eps=1e-5):
     
         assert channel_dim != 0
-        
         if channel_dim < 0: channel_dim = x.dim() + channel_dim
-        excl_channel_dim = (i for i in range(x.dim()) if i != channel_dim)
-        excl_channel_dim = tuple(excl_channel_dim)
-        mean = x.mean(excl_channel_dim, keepdim=True)
-        std = x.std(excl_channel_dim, keepdim=True)
-        x = x.sub(mean).div(std.add(eps))
-        for d in excl_channel_dim[1:]:
-            x = x.cumsum(d)
-        
+        excl_channel_dim = tuple(i for i in range(1,x.dim()) if i != channel_dim)
+        for d in excl_channel_dim:
+            c = x.cumsum(d)
+            m = (c.max(d,keepdim=True)[0] - c.min(d,keepdim=True)[0]) / 2
+            x = (c-m)
+                
         s = 0
         if channel_dim != 1:
-            to_channels_first = (0,channel_dim) + excl_channel_dim[1:]
+            to_channels_first = (0, channel_dim) + excl_channel_dim
             x = x.permute(*to_channels_first)
+        
         for f,sign in zip(flows, signs):
-            s += sign * _F.grid_sample(x, f, padding_mode=padding_mode, 
-                                      align_corners=True)
+            s = s + sign * _F.grid_sample(x, f, mode="bilinear", 
+                                          padding_mode=padding_mode, 
+                                          align_corners=False)
+            
         if channel_dim != 1:
             to_channels_orig = (to_channels_first.index(i) 
                                 for i in range(x.dim()))
             s = s.permute(*to_channels_orig)
         
-        return s.div(areas.add(eps)).mul(std).add(mean)
+        return s.div(areas)
     
     def update_kernel_sizes(self, kernel_sizes):
         if kernel_sizes is not None:
