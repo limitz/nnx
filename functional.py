@@ -484,6 +484,9 @@ def invert_permutation(p):
     p = [v if v >= 0 else (v+len(p)) for v in p]
     return [p.index(i) for i in range(len(p))]
 
+def move_dim(x, dim_from, dim_to):
+    return _torch.stack(x.unbind(dim_from), dim_to)
+
 def reduce(input, reduction="mean", dim=None, keepdim=False, 
            **kwargs):
     if isinstance(reduction, dict):

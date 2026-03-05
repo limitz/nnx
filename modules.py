@@ -178,12 +178,17 @@ class Stack(ModuleFunction): ...
 class FxFunction(ModuleFunction):
     def __init__(self, *args, _attr=None, **kwargs):
         super().__init__(*args, _module=_Fx, _attr=_attr, **kwargs)
-        
+
+class MoveDim(FxFunction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, _attr="move_dim", **kwargs)
+
 class PadCat(FxFunction): ...
 class PadStack(FxFunction): ...
 class VoxelShuffle(FxFunction):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, _attr="voxel_shuffle", **kwargs)
+        
 class VoxelUnshuffle(FxFunction):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, _attr="voxel_unshuffle", **kwargs)
@@ -392,6 +397,41 @@ class AdaptiveBoxBlurNd(_nn.Module):
                                  channel_dim=self.channel_dim)
 
 
+class AdaptiveLocalNormNd(_nn.Module):
+    def __init__(self, hidden_dim, radius=(3,31), 
+                 nonlinearity=_nn.GELU, mlp_expand=1, 
+                 padding_mode="zeros",
+                 eps=1e-8):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.register_buffer("eps", _Fx.tensor(eps))
+        self.register_buffer("radius", _Fx.tensor(radius))
+        self.blur = AdaptiveBoxBlurNd()
+        self.padding_mode = padding_mode
+        self.kernel_size = _nn.Sequential(
+            MoveDim(1,-1),
+            _nn.Linear(hidden_dim, hidden_dim*mlp_expand),
+            _nn.LayerNorm(hidden_dim * mlp_expand),
+            nonlinearity(),
+            _nn.Linear(hidden_dim*mlp_expand, 2),
+            _nn.Sigmoid())
+            
+    def forward(self, x):
+        q,r = self.radius
+        rr = r//2+1
+        # TODO unsure if the padding should be r or r//2, opt +1
+        x = _F.pad(x, (rr,)*4, mode=self.padding_mode)
+        ks = self.kernel_size(x)
+        ks = ks * r.sub(q) + q
+        self.blur.update_kernel_sizes(ks)
+        x1 = self.blur(x)
+        x2 = self.blur(x.pow(2)) 
+        # might produce negative values due to cumsum on float...
+        v = x2 - x1.pow(2)
+        std = v.clamp(self.eps).sqrt()
+        x = (x - x1) / std
+        x = x[...,rr:-rr,rr:-rr]
+        return x
         
 class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
     def __init__(self, num_classes, betas=(0.9, 0.999, 0.99), *args, **kwargs):
