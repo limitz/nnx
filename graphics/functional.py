@@ -4,6 +4,7 @@ import numpy as _np
 import cv2 as _cv2
 import math as _math
 from .. import functional as _Fx
+from .. import projection as _P
 
 def border(x, color=(1,1,1.), thickness=1, inplace=False):
     color = _Fx.tensor(color).unflatten(-1,(-1,1))
@@ -88,3 +89,57 @@ def make_grid(x, cols=None, padding=1, pad_value=0, **kwargs):
     if cols > 1 or rows > 1:
         x = _F.pad(x, (padding,0,padding,0), "constant", pad_value)
     return x
+
+
+def valid_crop_rect(tlbr, shape, wrap=True, clamp=True):
+    hwhw = _Fx.tensor(shape[-2:] * 2)
+    tlbr = _Fx.tensor([int(v*s) if isinstance(v, float) else int(v) for v,s in zip(tlbr,hwhw)])
+    if wrap:
+        tlbr = [v+s if v < 0 else v for v,s in zip(tlbr,hwhw)]
+    if clamp:
+        tlbr = [v.clamp(0,s) for v,s in zip(tlbr,hwhw)]
+    return tuple(v.item() for v in tlbr)
+    
+def blend(dst, x, position, alpha=None, mode="bilinear", inplace=True, **kwargs):
+    dim = dst.dim()
+    while dst.dim() < 4: dst = dst[None]
+    while x.dim() < 4: x = x[None]
+        
+    if not inplace:
+        dst = dst.clone()
+    *n,c,h,w = x.shape
+    if alpha is not None:
+        x = x.expand(*n,3,h,w)
+        alpha = _Fx.tensor(alpha).view(-1,1,1).expand_as(x)
+        alpha = (~x.eq(alpha).all(-3,keepdim=True)).float()
+        x = _torch.cat((x, alpha),-3)
+    elif c < 4:
+        x = _F.pad(x.expand(*n,3,h,w), (0,0,0,0,0,1), "constant", 1.)
+
+    position = _Fx.tensor(position)
+    if position.shape[-2:] == (2,3):
+        position = position.expand(*dst.shape[:-3], -1, -1)
+        grid = _F.affine_grid(position.float(), dst.shape, align_corners=False)
+        x = _F.grid_sample(x, grid, mode=mode, align_corners=False)
+        t,l,b,r = 0, 0, *dst.shape[-2:]
+    elif position.shape[-2:] == (3,3):
+        position = position.expand(*dst.shape[:-3], -1, -1)
+        grid = _P.perspective_grid(position.float(), dst.shape)
+        x = _F.grid_sample(x, grid, mode=mode, align_corners=False)
+        t,l,b,r = 0, 0, *dst.shape[-2:]
+    elif len(position) == 2:
+        t,l = position
+        b,r = t+h,l+w
+    elif len(position) == 4:
+        t,l,b,r = valid_crop_rect(position, dst.shape)
+        h,w = b-t,r-l
+        if x.shape[-2:] != (h,w):
+            x = _F.interpolate(x, (h,w), mode=mode)
+    
+    dst[...,t:b,l:r] = dst[...,t:b,l:r] * (1-x[...,-1:,:,:]) + x[...,:-1,:,:]
+    while dim < dst.dim(): 
+        assert dst.shape[0] == 1
+        dst = dst[0]
+    
+    return dst
+    
