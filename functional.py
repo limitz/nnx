@@ -151,7 +151,7 @@ def broadcast_shape(input, ignore_dim=None):
 
 
 def interpolate(input, size=None, scale_factor=None, mode="nearest", **kwargs):
-    if -1 in size:
+    if size is not None and -1 in size:
         assert isinstance(input, (list, tuple))
         r = []
         for x in input:

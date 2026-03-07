@@ -204,7 +204,8 @@ class SampleUnshuffle(FxFunction):
 class Norm(FxFunction): ...
 class Center(FxFunction): ...
 class Reduce(FxFunction): ...
-
+class Interpolate(FxFunction): ...
+    
 class FFTFunction(ModuleFunction):
     def __init__(self, *args, _attr=None, **kwargs):
         super().__init__(*args, _module=_torch.fft, _attr=_attr, **kwargs)
@@ -234,7 +235,7 @@ class Tee(_nn.Sequential):
 class Ignore(_nn.Sequential):
     def forward(self, x):
         return x
-
+        
 class ResizedLike(_nn.Sequential):
     def __init__(self, *args, **kwargs):
         super().__init__(*args)
