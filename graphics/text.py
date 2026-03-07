@@ -5,6 +5,7 @@ import cv2 as _cv2
 import math as _math
 import matplotlib.pyplot as _plt
 from .. import functional as _Fx
+from .. import console as _console
 
 TRANSPARENT = 0
 assert TRANSPARENT == 0 # for now, render_text assumes it
@@ -266,8 +267,8 @@ def render_text_to(dst, text, font=DEFAULT, spacing=0, padding=1,
     ...
     assert False
     
-def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=80, 
-                device="cpu",colorspace="palette", **kwargs):
+def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=None, 
+                device="cpu",colorspace="rgb", **kwargs):
     if not isinstance(spacing, (list, tuple)):
         spacing = [spacing] * 2
     if not isinstance(padding, (list, tuple)):
@@ -276,25 +277,58 @@ def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=80,
         padding = [padding[0],padding[0],padding[1],padding[1]]
     assert len(padding) == 4
 
+    if wrap is not None:
+        text = _console.wrap(text, wrap)
     lines = text.split("\n")
+
+    """
     rlines = []
     for line in lines:
-        while len(line) > wrap:
+        tokens = _console.csi_tokenize(_console.csi_render(line))
+        token_lengths = list(0 if _console.is_csi_token(t) else 1 for t in tokens)
+        while sum(token_lengths) > wrap:
+            while j < wrap:
             rlines.append(line[:wrap])
             line = line[wrap:]
         if len(line):
             rlines.append(line)
     lines = rlines
-    max_length = max(len(line) for line in lines)
+    """
+    max_length = max(len(_console.strip_all(line)) for line in lines)
     rs = []
+    if colorspace == "rgb":
+        backcolor=_torch.tensor((0,0,0.), device=device)
+        forecolor=_torch.tensor((1,1,1.), device=device)
+    elif colorspace == "palette":
+        backcolor=_torch.tensor((0,), device=device)
+        forecolor=_torch.tensor((1,), device=device)
+        
     for j,line in enumerate(lines):
         r = []
+        line = _console.csi_tokenize(_console.csi_render(line))
         for i,c in enumerate(line):
+            if colorspace == "rgb":
+                if _console.is_csi_token(c):
+                    key = _console.color.reverse_lookup(c)
+                    if key.startswith("#"):
+                        forecolor = _torch.tensor(tuple(int(key[i*2+1:3+i*2],base=16)/255 
+                                                        for i in range(3)), device=device)
+                    elif key.startswith("~"):
+                        backcolor = _torch.tensor(tuple(int(key[i*2+1:3+i*2],base=16)/255 
+                                                        for i in range(3)), device=device)
+                    elif key == "/":
+                        backcolor=_torch.tensor((0,0,0.), device=device)
+                        forecolor=_torch.tensor((1,1,1.), device=device)                
             if c not in font: continue
-            c = _torch.tensor(font[c], dtype=_torch.long, device=device)
+            c = _torch.tensor(font[c], dtype=_torch.long, device=device)[None]
             c = _F.pad(c, (0, spacing[1] if i < len(line)-1 else 0, 
                           0, spacing[0] if j < len(lines)-1 else 0),
                        "constant", TRANSPARENT)
+            if colorspace == "rgb":
+                if c.gt(1).any():
+                    c = palette_to_rgb(c) - (c.gt(0)*backcolor.view(-1,1,1)) + (c.eq(0)*backcolor.view(-1,1,1))
+                else:
+                    c = c * (forecolor-backcolor).view(-1,1,1) + backcolor.view(-1,1,1)
             r.append(c)
         if len(r):
             rs.append(_Fx.padcat(r, -1))
@@ -306,9 +340,5 @@ def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=80,
         rs = torch.zeros(1,1,device=device)
     rs = _F.pad(rs, padding, "constant", TRANSPARENT)
         
-    if colorspace == "rgb":
-        rs = palette_to_rgb(rs[None])
-        return rs
-    else:
-        return rs[None].float()
+    return rs
 

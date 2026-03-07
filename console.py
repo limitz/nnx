@@ -140,6 +140,7 @@ class ProgressBar:
         return r.format(**kwargs)
             
 class TrueColor:
+    
     def __init__(self):
         self.registered_colors = {}
         self.register("red", "#FF0000")
@@ -170,7 +171,23 @@ class TrueColor:
         self.registered_colors["blink"] = ("\x1b[6m", "blinking")
         self.registered_colors["/blink"] = ("\x1b[26m", "not blinking")
         self.registered_colors["clear"] = ("\x1b[0K", "clear line")
+
+    def reverse_lookup(self, csi):
+        if csi.startswith("\x1b[38"):
+            r,g,b = (int(v) for v in csi[:-1].split(";")[2:])
+            return f"#{r:02x}{g:02x}{b:02x}"
             
+        elif csi.startswith("\x1b48"):
+            r,g,b = (int(v) for v in csi[:-1].split(";")[2:])
+            return f"~{r:02x}{g:02x}{b:02x}"
+
+        else:
+            for k,(c,_) in self.registered_colors.items():
+                if c == csi:
+                    return k
+            else:
+                return None
+        
     def register(self, name, rgb):
         c = self.__getitem__(rgb, exclude_prefix=True)
         self.registered_colors[name] = (c, f"color {name} ({rgb})")
