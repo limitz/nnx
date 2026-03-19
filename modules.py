@@ -435,37 +435,45 @@ class AdaptiveLocalNormNd(_nn.Module):
         return x
         
 class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
-    def __init__(self, num_classes, betas=(0.9, 0.999, 0.99), *args, **kwargs):
+    def __init__(self, num_classes, adapt="weight", betas=(0.9, 0.999, 0.999),  *args, **kwargs):
         super().__init__(*args, **kwargs)
+        assert adapt in { "weight", "score" }
         self.betas = betas
         self.num_classes = num_classes
+        self.adapt = adapt
+        self.register_buffer("counts", _torch.ones(num_classes))
         self.register_buffer("scores", _torch.ones(num_classes))
         if self.weight is None:
             self.register_buffer("weight", _torch.ones(num_classes))
         
     def reset(self):
         with _torch.no_grad():
+            self.counts.copy_(_torch.ones_like(self.counts))
             self.scores.copy_(_torch.ones_like(self.scores))
         
     def forward(self, pred, target):
         if _torch.is_grad_enabled():
             with _torch.no_grad():
-                correct = pred.argmax(-1) == target
+                correct = pred.argmax(1) == target
                 n = self.num_classes
                 
                 # update the scores
-                total = _torch.bincount(target, minlength=n)
+                total = _torch.bincount(target.view(-1), minlength=n)
                 #correct = _torch.bincount(target[correct], minlength=n)
-                correct = pred.softmax(-1) * _F.one_hot(target,n)
-                correct = correct.sum(0)
+                correct = pred.softmax(1) * _Fx.one_hot(target,n,dim=1)
+                correct = correct.transpose(0,1).flatten(1).sum(1)
                 classes = total.nonzero().view(-1)
                 scores = self.scores.mul(self.betas[0])
                 scores = scores + (correct/total).mul(1-self.betas[0])
                 scores = scores[classes]
                 self.scores[classes] = scores
+                total = self.counts.mul(self.betas[0]) + total.mul(1-self.betas[0])
+                self.counts.copy_(total)
 
+                w = self.scores if self.adapt == "score" else self.counts
+                
                 #update the weights
-                weight = self.scores.sum() / (self.num_classes * self.scores)
+                weight = (w.sum() / (self.num_classes * w)) / self.num_classes
                 weight = self.weight.log() * self.betas[1] + weight.log() * (1-self.betas[2])
                 weight = weight.exp()
                 self.weight.copy_(weight)
@@ -520,6 +528,30 @@ class Trainer(_nn.Module):
     def step(self):
         return self.optimizer.step()
 
+class L1Loss(_nn.L1Loss):
+    def forward(self, pred, target):
+        if pred.dtype in { _torch.cfloat, _torch.cdouble }:
+            r = super().forward(
+                _torch.view_as_real(pred),
+                _torch.view_as_real(target))
+            if r.dim() == pred.dim() + 1 and r.shape[-1] == 2:
+                r = r.sum(-1)
+            return r
+        else:
+            return super().forward(pred, target)
+
+class MSELoss(_nn.MSELoss):
+    def forward(self, pred, target):
+        if pred.dtype in { _torch.cfloat, _torch.cdouble }:
+            r = super().forward(
+                _torch.view_as_real(pred),
+                _torch.view_as_real(target))
+            if r.dim() == pred.dim() + 1 and r.shape[-1] == 2:
+                r = r.sum(-1)
+            return r
+        else:
+            return super().forward(pred, target)
+            
 class CompoundLoss(_nn.ModuleList):
     def __init__(self, losses, strict=True):
         assert isinstance(losses, (dict, list, tuple)), "invalid argument"
@@ -829,4 +861,81 @@ class Between:
             return _Fx.is_between(test, a, b, self.inclusive)
         else:
             return _Fx.sample_between(a, b, n, self.inclusive)
-        
+
+
+class Parse2d(_nn.Sequential):
+    def __init__(self, string, hidden_dim=None):
+        self.string = string
+        self.hidden_dim = hidden_dim
+        super().__init__(*_parse_block(string, hidden_dim))
+
+    def extra_repr(self):
+        if self.hidden_dim is not None:
+            return f"string=\"{self.string}\", hidden_dim={self.hidden_dim}"
+        else:
+            return f"string=\"{self.string}\""
+            
+def _parse_block(config, hidden_dim=None):
+    s = [[]]
+    i = o = hidden_dim
+    for idx in range(len(config)):
+        c = config[idx]
+        d = config[idx+1] if idx < len(config)-1 else None
+        if c in { "C", "c", "L", "l" , "N", "n"}:
+            if d == "[":
+                e = config[idx+1:].index("]")
+                v = config[idx+2:idx+1+e]
+                if "," in v:
+                    i,o = [int(vv) for vv in v.split(",")]
+                else:
+                    o = int(v)  
+                idx = idx + 1 + e
+
+        if c == "[":
+            e = config[idx:].index("]")
+            v = config[idx+1:idx+e]
+            i = o = int(v)  
+            idx = idx + e
+        elif c == "C":
+            s[-1].append(_nn.Conv2d(i, o, 3, padding=1))
+            i = o
+        elif c == "c":
+            s[-1].append(_nn.Conv2d(i, o, 3, padding=1, bias=False))
+            i = o
+        elif c == "L":
+            s[-1].append(_nn.Conv2d(i, o, 1))
+            i = o
+        elif c == "l":
+            s[-1].append(_nn.Conv2d(i, o, 1, bias=False))
+            i = o
+        elif c == "I":
+            s[-1].append(_nn.InstanceNorm2d(i, affine=True))
+        elif c == "i":
+            s[-1].append(_nn.InstanceNorm2d(i, affine=False))
+        elif c == "N":
+            s[-1].append(_nn.GroupNorm(o,i,affine=True))
+            o = i
+        elif c == "n":
+            s[-1].append(_nn.GroupNorm(o,i,affine=False))
+            o = i
+        elif c == "E":
+            s[-1].append(_nn.ELU())
+        elif c == "R":
+            s[-1].append(_nn.ReLU())
+        elif c == "G":
+            s[-1].append(_nn.GELU())
+        elif c == "S":
+            s[-1].append(_nn.Sigmoid())
+        elif c == "T":
+            s[-1].append(_nn.Tanh())
+        elif c == "(":
+            s.append([])
+        elif c == ")":
+            r = s.pop(-1)
+            r = Skip(*r)
+            s[-1].append(r)
+    assert len(s) == 1
+    return s[-1]
+    #if len(s[-1]) == 1: return s[-1][0]
+    #else: return _nn.Sequential(*s[-1])
+            

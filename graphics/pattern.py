@@ -29,7 +29,8 @@ def render_random_pattern(size, pattern_size=_nnx.Between((2,2),(5,5)), num_colo
         for i in range(0, r.shape[0], step):
             r[i:] = r[i:].roll(roll_val, dims=-1)
             r = r.transpose(roll_dim, -1)
-        r = r[None, :size[-2],:size[-1]]
-        if colorspace == "rgb":
-            r = _text.palette_to_rgb(r)
-        return r
+    
+    r = r[None, :size[-2],:size[-1]]
+    if colorspace == "rgb":
+        r = _text.palette_to_rgb(r)
+    return r

@@ -100,6 +100,36 @@ def pad_to(input, size, mode="center", *args, **kwargs):
 
 crop_to = pad_to
 
+def bit_encode(x, dim=-1, bits=None):
+    assert x.dtype in { _torch.uint8, _torch.long }
+    if x.dtype == _torch.uint8 and bits is None: bits = 8
+    elif x.dtype == _torch.long and bits is None: bits = 32
+    assert x.long().lt(1<<bits).all()
+    y = [(x >> i) & 1 for i in range(bits)]
+    y = _torch.stack(y,dim)
+    return y
+
+def bit_decode(x, dim=-1, dtype=None, keepdim=False):
+    x = x.gt(0).long()
+    if keepdim:
+        x = x.split(1,dim)
+    else:
+        x = x.unbind(dim)
+        
+    bits = len(x)
+    dtype = dtype or (_torch.uint8 if bits <= 8 else _torch.long)
+    
+    y = sum([(v << i) for i,v in enumerate(x)])
+    y = y.to(dtype)
+    return y
+  
+def one_hot(*args, dim=-1, **kwargs):
+    x = _F.one_hot(*args, **kwargs)
+    if dim < 0: dim = x.dim() + dim
+    if dim != x.dim()-1:
+        x = _torch.stack(x.unbind(-1), dim)
+    return x
+        
 def all_in_set(a,b, allow_empty=True, allow_none=True):
     if a is None: return allow_none
     if len(a) == 0: return allow_empty
@@ -265,7 +295,7 @@ def grid_to_flow(grid):
     return grid.permute(dims)
     
 def flow_sample(input, flow, *args, **kwargs):
-    return grid_sample(input,flow_to_grid(flow), **args, **kwargs)   
+    return grid_sample(input,flow_to_grid(flow), *args, **kwargs)   
 
 def linfield(*size, device="cpu"):
     assert len(size) > 0
