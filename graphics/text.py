@@ -4,6 +4,7 @@ import numpy as _np
 import cv2 as _cv2
 import math as _math
 import matplotlib.pyplot as _plt
+import freetype as _freetype
 from .. import functional as _Fx
 from .. import console as _console
 
@@ -213,6 +214,69 @@ ALIENS = {
 
 DEFAULT = DEFAULT_12X6
 
+def TTF(ttf_path: str, size: int = 16,
+        dtype: _torch.dtype = _torch.bool) -> dict[str, _torch.Tensor]:
+    """
+    Read a .ttf file and return a dict mapping each printable ASCII character
+    to a glyph tensor of shape (H, W).
+
+    Args:
+        ttf_path: Path to the .ttf font file.
+        size:     Font size in pixels (controls glyph height).
+        dtype:    Output dtype.
+                    torch.bool  -> binary mask (threshold at > 0)
+                    torch.uint8 -> antialiased, values 0-255
+                    torch.float32/float16/... -> antialiased, values in [0, 1]
+
+    Returns:
+        Dict mapping character -> (H, W) tensor of the given dtype.
+    """
+    face = _freetype.Face(ttf_path)
+    face.set_pixel_sizes(0, size)
+
+    # First pass: render all glyphs and collect metrics for baseline alignment
+    glyphs = {}
+    max_ascent = 0
+    max_descent = 0
+    for code in range(32, 127):
+        char = chr(code)
+        face.load_char(char, _freetype.FT_LOAD_RENDER)
+        bmp = face.glyph.bitmap
+        top = face.glyph.bitmap_top  # rows above baseline
+        if bmp.rows > 0 and bmp.width > 0:
+            # Copy buffer now — FreeType reuses the glyph slot on next load_char
+            arr = _np.array(bmp.buffer, dtype=_np.uint8).reshape(bmp.rows, bmp.pitch)
+            arr = arr[:, :bmp.width].copy()
+        else:
+            arr = None
+        glyphs[char] = (arr, top)
+        max_ascent = max(max_ascent, top)
+        max_descent = max(max_descent, bmp.rows - top)
+
+    # Second pass: pad each glyph to align on the shared baseline
+    bitmaps = {}
+    h = max_ascent + max_descent
+    for char, (arr, top) in glyphs.items():
+        if arr is None:
+            canvas = _np.zeros((h, 1), dtype=_np.uint8)
+        else:
+            pad_top = max_ascent - top
+            pad_bottom = max_descent - (arr.shape[0] - top)
+            canvas = _np.pad(arr, ((pad_top, pad_bottom), (0, 0)))
+
+        canvas = _np.pad(canvas, pad_width=1)  # 1px border
+
+        if dtype == _torch.bool:
+            t = _torch.from_numpy(canvas > 0)
+        elif dtype == _torch.uint8:
+            t = _torch.from_numpy(canvas)
+        else:
+            t = _torch.from_numpy(canvas / 255.0).to(dtype)
+
+        bitmaps[char] = t
+
+    return bitmaps
+
 def wrap_text(text, wrap_or_size=None, font=DEFAULT,  
               spacing=0, padding=0):
     if isinstance(wrap_or_size, (tuple, list, _torch.Size, _torch.Tensor)):
@@ -230,29 +294,33 @@ def wrap_text(text, wrap_or_size=None, font=DEFAULT,
     assert len(padding) == 4
 
     if size is not None:
-        width_of_char = len(DEFAULT[" "][0]) + spacing[0]
-        width_available = size[0] - (padding[0] + padding[1]) + spacing[0] 
-        max_chars_per_line = width_available // width_of_char
+        def char_w(c):
+            if c not in font or not len(font[c]): return 0
+            row = font[c][0]
+            return (len(row) if hasattr(row, '__len__') else 1) + spacing[0]
+        limit = size[0] - (padding[0] + padding[1]) + spacing[0]
     elif wrap is not None:
-        max_chars_per_line = wrap
+        char_w = lambda c: 1
+        limit = wrap
     else:
-        max_chars_per_line = 1<<32
-    
-    lines = text.strip().split("\n")
-    i = 0
-    while i < len(lines):
-        line = lines[i] 
-        if len(line) > max_chars_per_line:
-            lines.insert(i+1,"")
-        while len(line) > max_chars_per_line:
-            line, word = line.rsplit(" ", 1)
-            word = word.strip()
-            if len(word) == 0: continue
-            if len(lines[i+1]) == 0: lines[i+1] = word
-            else: lines[i+1] = word + " " + lines[i+1]
-        lines[i] = line
-        i += 1
-    return lines
+        char_w = lambda c: 1
+        limit = 1 << 32
+
+    space_w = char_w(' ')
+    result = []
+    for line in text.strip().split("\n"):
+        current, current_w = "", 0
+        for word in line.split(" "):
+            word_w = sum(char_w(c) for c in word)
+            sep_w = space_w if current else 0
+            if current and current_w + sep_w + word_w > limit:
+                result.append(current)
+                current, current_w = word, word_w
+            else:
+                current += (" " if current else "") + word
+                current_w += sep_w + word_w
+        result.append(current)
+    return result
 
 def render_text_to(dst, text, font=DEFAULT, spacing=0, padding=1, 
                    device="cpu", **kwargs):
@@ -325,12 +393,16 @@ def render_text(text, font=DEFAULT, spacing=0, padding=1, wrap=None,
                         backcolor=_torch.tensor((0,0,0.), device=device)
                         forecolor=_torch.tensor((1,1,1.), device=device)                
             if c not in font: continue
-            c = _torch.tensor(font[c], dtype=_torch.long, device=device)[None]
-            c = _F.pad(c, (0, spacing[1] if i < len(line)-1 else 0, 
+            _glyph = font[c]
+            if isinstance(_glyph, _torch.Tensor) and _glyph.is_floating_point():
+                c = _glyph.to(device=device)[None]
+            else:
+                c = _torch.as_tensor(_glyph, dtype=_torch.long, device=device)[None]
+            c = _F.pad(c, (0, spacing[1] if i < len(line)-1 else 0,
                           0, spacing[0] if j < len(lines)-1 else 0),
                        "constant", TRANSPARENT)
             if colorspace == "rgb":
-                if c.gt(1).any():
+                if not c.is_floating_point() and c.gt(1).any():
                     c = palette_to_rgb(c) - (c.gt(0)*backcolor.view(-1,1,1)) + (c.eq(0)*backcolor.view(-1,1,1))
                 else:
                     c = c * (forecolor-backcolor).view(-1,1,1) + backcolor.view(-1,1,1)
