@@ -16,4 +16,3 @@ from .audio import *
 from .image import *
 #from .graph import *
 from .functional import *
-from .spline import *

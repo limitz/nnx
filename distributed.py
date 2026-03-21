@@ -50,13 +50,13 @@ class all_reduce_with_grad(_torch.autograd.Function):
         ):
             x = x.contiguous()
             _dist.all_reduce(x, op)
-            ctx["op"] = op
+            ctx.op = op
         return x
 
     @staticmethod
     def backward(ctx, grads):
-        if "op" in ctx:
-            if ctx["op"] in { ReduceOp.SUM, ReduceOp.AVG }:
+        if hasattr(ctx, "op"):
+            if ctx.op in { ReduceOp.SUM, ReduceOp.AVG }:
                 return grads
             else:
                 assert False, "implementation needs to be checked"
@@ -96,8 +96,8 @@ class SyncGroupNorm(_nn.Module):
         groups = x.view(x.shape[0], self.groups, -1)
         if (
             _dist.is_available() 
-            and _dist.is_enabled() 
-            and (_dist.world_size() > 1)
+            and _dist.is_initialized()
+            and (_dist.get_world_size() > 1)
         ):
             x1 = groups.mean(-1)
             x2 = groups.pow(2).mean(-1)
@@ -110,13 +110,13 @@ class SyncGroupNorm(_nn.Module):
                                _torch.zeros_like(std),
                                std)
         else:
-            std, mean = torch.std_mean(groups,-1,correction=0,
+            std, mean = _torch.std_mean(groups,-1,correction=0,
                                        keepdim=True)
             
         groups = groups.sub(mean).div(std.add(self.eps))
         x = groups.view(x.shape)
         if self.affine:
-            w = self.weight.view(self.channels, [1] * (x.dim()-2))
-            b = self.bias.view(self.channels, [1]*(x.dim()-2))
+            w = self.weight.view(self.channels, *[1] * (x.dim()-2))
+            b = self.bias.view(self.channels, *[1]*(x.dim()-2))
             x = x * w + b
         return x

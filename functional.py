@@ -640,7 +640,7 @@ def distance_to_mask(pt, masks):
             
     for mask in masks:
         #print(mask.shape)
-        contours,_ = cv2.findContours(mask.view(*mask.shape[-2:]).gt(0.3).byte().cpu().numpy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours,_ = _cv2.findContours(mask.view(*mask.shape[-2:]).gt(0.3).byte().cpu().numpy(), _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
         #contours = sorted(contours, key = lambda v: cv2.moments(v)["m00"])
         rs = []
         for c in contours:

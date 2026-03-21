@@ -10,7 +10,7 @@ import collections as _collections
 from .. import functional as _Fx
 
 class WIDERface(_torch.utils.data.Dataset):
-    def __init__(self, root, split="train", transform=None, target_transform=None):
+    def __init__(self, root, split="train", transform=None, target_transform=None, mask_size=None):
         assert split in {"train", "eval"}
         self.split = split
         self.category_names = {}
@@ -19,11 +19,12 @@ class WIDERface(_torch.utils.data.Dataset):
         self.annotations = {}
         self.transform = transform
         self.target_transform = target_transform
-        
+        self.mask_size = mask_size
+
         if split == "eval": split = "val"
-        gt_path = os.path.join(root, "widerface","wider_face_split")
-        gt_path = os.path.join(gt_path, f"wider_face_{split}_bbx_gt.txt")
-        self.root = os.path.join(root, "widerface", f"WIDER_{split}", "images")
+        gt_path = _os.path.join(root, "widerface","wider_face_split")
+        gt_path = _os.path.join(gt_path, f"wider_face_{split}_bbx_gt.txt")
+        self.root = _os.path.join(root, "widerface", f"WIDER_{split}", "images")
         with open(gt_path) as stream:
             while True:
                 path = stream.readline()[:-1]
@@ -54,13 +55,16 @@ class WIDERface(_torch.utils.data.Dataset):
         path = self.files[idx]
         boxes = self.annotations[path]
         boxes = _torch.tensor(boxes)[:,:4]
-        image = _torchvision.io.read_image(os.path.join(self.root, path))/255
-        boxes[...,[0,2]] /= image.shape[-1]
-        boxes[...,[1,3]] /= image.shape[-2]
-        mask = _torch.zeros(1,SIZE,SIZE)
+        image = _torchvision.io.read_image(_os.path.join(self.root, path))/255
+        if self.mask_size is not None:
+            boxes[...,[0,2]] /= image.shape[-1]
+            boxes[...,[1,3]] /= image.shape[-2]
+            mask = _torch.zeros(1,*self.mask_size)
+        else:
+            mask = _torch.zeros(1, *image.shape[-2:])
         for box in boxes:
             area = box[-2] * box[-3]
-            Fx.crop_view(mask, box)[:] = area ** -0.5 / len(boxes)
+            _Fx.crop_view(mask, box)[:] = area ** -0.5 / len(boxes)
         
         #cid = self.categories[path]
         

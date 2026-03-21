@@ -131,7 +131,7 @@ def project_nd(x, thetas, size=None, mode="bilinear", padding_mode="zeros", spli
     d = thetas.shape[-1]
     if isinstance(x,list):
         for v, t in zip(x, thetas.split(1,-3)):
-            y = project_3d(v, t, size=size, mode=mode, padding_mode=padding_mode, split_dim=split_dim)
+            y = project_nd(v, t, size=size, mode=mode, padding_mode=padding_mode, split_dim=split_dim)
             r.append(y)
         return _torch.cat(r,-d-2)
     else:
@@ -139,18 +139,17 @@ def project_nd(x, thetas, size=None, mode="bilinear", padding_mode="zeros", spli
         if split_dim is not None:
             assert split_dim > 0
             for v, t in zip(x.split(1,split_dim), thetas.split(1, split_dim)):
-                y = project_3d(v, t, size=size, mode=mode, padding_mode=padding_mode, split_dim=None)
+                y = project_nd(v, t, size=size, mode=mode, padding_mode=padding_mode, split_dim=None)
                 r.append(y)
             return _torch.cat(r, split_dim)
         else:
             thetas = _torch.nan_to_num(thetas)
             size = size or x.shape[-d:]
             field = matrix_field_nd(thetas, size)
-            ...
-            y = grid_sample(x.flatten(0,-d-2), grid, 
-                            align_corners=True, mode=mode, 
+            y = grid_sample(x.flatten(0,-d-2), field,
+                            align_corners=True, mode=mode,
                             padding_mode=padding_mode)
-            return _torch.stack(r)
+            return y
 
 def gaussian_splat_2d(thetas, size, weights=None, sigma=1, reduction="none"):
     h,w = size
@@ -197,7 +196,7 @@ def masks_to_thetas(masks, margin=0.1):
     for mask in masks:
         thetas = []
         if mask.eq(0).all():
-            thetas.append(torch.eye(3, device=mask.device))
+            thetas.append(_torch.eye(3, device=mask.device))
         else:
             contours,_ = _cv2.findContours(mask.view(*mask.shape[-2:]).byte().cpu().numpy(), 
                                            _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
@@ -321,16 +320,16 @@ def ltrb_to_thetas(boxes, image_size):
     return theta
     
 def quad_to_thetas(quads, image_size):
-    assert boxes.dim() in { 2, 3 }
-    assert boxes.shape[-1] == 4
+    assert quads.dim() in { 2, 3 }
+    assert quads.shape[-1] == 4
     lshape = quads.shape[:-2]
     s = _torch.tensor(image_size).flip(-1)
     pts = 2 * quads / s - 1
-    src = _torch.tensor([[-1,-1],[1,-1],[1,1],[-1,1]], device=boxes.device, dtype=_torch.float)
+    src = _torch.tensor([[-1,-1],[1,-1],[1,1],[-1,1]], device=quads.device, dtype=_torch.float)
     pts = pts.view(-1,4,2)
     theta = perspective_matrix(src.repeat(pts.shape[0],1,1),pts)
     theta = theta.reshape(*lshape,3,3)
-    if boxes.dim() == 3: theta = theta.transpose(0,1)
+    if quads.dim() == 3: theta = theta.transpose(0,1)
     return theta
 
 @_torch.no_grad()
@@ -411,8 +410,8 @@ def draw_attention(image, thetas, weights, power=1):
         pts1 = pts0 @ t.mT
         pts2 = _np.int32(((pts1[:,:,:2]/pts1[:,:,[2]]) * sflipped/2 + sflipped/2).cpu().numpy())
         ws = weights[:,i]
-        mask = _np.zeros((*size, 1), dtype=_np.float)
-        attention = _np.zeros((*size, 1), dtype=_np.float)
+        mask = _np.zeros((*size, 1), dtype=float)
+        attention = _np.zeros((*size, 1), dtype=float)
         for pts,w in zip(pts2,ws):
             _cv2.fillPoly(mask, pts=[pts], color=1)
             attention += mask * w ** power
@@ -422,7 +421,7 @@ def draw_attention(image, thetas, weights, power=1):
         y = attention / 2 + image[i].mean(0) / 2
         u = -attention.mul(_math.pi/2).sin() * (attention)
         v = attention.mul(_math.pi/2).cos() * (attention)
-        rgb = _G.yuv_to_rgb(torch.cat((y,u,v), -3))
+        rgb = _G.yuv_to_rgb(_torch.cat((y,u,v), -3))
         d[:] = rgb
     return list(dst.split(1)) if isinstance(image, list) else dst
 
@@ -486,7 +485,7 @@ def unproject_patches(patches_or_x, thetas, weights=None, size=None, mode="bilin
     if patches_or_x.dim() == 5:
         patches = patches_or_x
     elif patches_or_x.dim() == 4:
-        patches = project(x, thetas, mode="nearest")
+        patches = project(patches_or_x, thetas, mode="nearest")
     else:
         assert False, "expected 4d or 5d input"
         
@@ -526,7 +525,7 @@ def unproject_patches(patches_or_x, thetas, weights=None, size=None, mode="bilin
         elif reduction == "sum" or reduction == "mean" or reduction =="realmean":
             projections = projections + projection.sum(0, keepdim=True)
         elif reduction == "max":
-            projections = torch.maximum(projections[0], projection.max(0)[0])[None]
+            projections = _torch.maximum(projections[0], projection.max(0)[0])[None]
         
     if reduction == "none":
         return _torch.cat(projections) # TNCHW
@@ -679,27 +678,27 @@ def random_flow_field_3d(nps=((3,5),(4,6),(9,14)), strengths=(1e-1, 4e-2, 1e-2),
         if affine > 0:
             field = field.permute(1,2,3,0)
             s = affine #strengths[0] if "global" in window_mode else 0.2
-            rotate = (_torch.randn(3) * math.pi) * s
+            rotate = (_torch.randn(3) * _math.pi) * s
             vect = rotate.sin().abs() + rotate.cos().abs()
             translate = _torch.randn(3) * s
             scale = _torch.ones(3)#.mul(vect)
             affines = _torch.tensor([
                 [
-                    [math.cos(rotate[0]), math.sin(rotate[0]), 0, 0],
-                    [-math.sin(rotate[0]), math.cos(rotate[0]), 0, 0],
+                    [_math.cos(rotate[0]), _math.sin(rotate[0]), 0, 0],
+                    [-_math.sin(rotate[0]), _math.cos(rotate[0]), 0, 0],
                     [0,0,1,0], 
                     [0,0,0,1]
                 ],
                 [
-                    [math.cos(rotate[1]), 0, math.sin(rotate[1]), 0],
-                    [0,1,0,0], 
-                    [-math.sin(rotate[1]), 0, math.cos(rotate[1]),  0],
+                    [_math.cos(rotate[1]), 0, _math.sin(rotate[1]), 0],
+                    [0,1,0,0],
+                    [-_math.sin(rotate[1]), 0, _math.cos(rotate[1]),  0],
                     [0,0,0,1]
                 ],
                 [
                     [1,0,0,0], 
-                    [0,math.cos(rotate[2]), math.sin(rotate[2]),  0],
-                    [0,-math.sin(rotate[2]), math.cos(rotate[2]), 0],
+                    [0,_math.cos(rotate[2]), _math.sin(rotate[2]),  0],
+                    [0,-_math.sin(rotate[2]), _math.cos(rotate[2]), 0],
                     [0,0,0,1]
                 ],
                 [
@@ -724,14 +723,14 @@ def random_flow_field_3d(nps=((3,5),(4,6),(9,14)), strengths=(1e-1, 4e-2, 1e-2),
     #field = field.permute(1,2,3,0)
     if True and affine:
         #s = 1
-        rotate = (_torch.rand(1).sub(0.5) * math.pi/2)
+        rotate = (_torch.rand(1).sub(0.5) * _math.pi/2)
         s = 1 #(rotate.sin().abs() + rotate.cos().abs())
         
         affines = _torch.tensor([
              [
                     [s,0,0,0], 
-                    [0,math.cos(rotate[0])*s, math.sin(rotate[0])*s,  0],
-                    [0,-math.sin(rotate[0])*s, math.cos(rotate[0])*s, 0],
+                    [0,_math.cos(rotate[0])*s, _math.sin(rotate[0])*s,  0],
+                    [0,-_math.sin(rotate[0])*s, _math.cos(rotate[0])*s, 0],
                     [0,0,0,1]
                 ],
                 

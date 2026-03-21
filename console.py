@@ -43,7 +43,7 @@ class EMA:
         return (self.x[2] / (self.x[0]+self.correction)) ** 0.5
 
     def __str__(self):
-        r = strip(self.__style_str__())
+        r = strip_all(self.__style_str__())
         return r
         
     def __style_str__(self, style=None):
@@ -57,7 +57,7 @@ class Spinner:
         self.idx = 0
 
     def __str__(self):
-        r = strip(self.__style_str__())
+        r = strip_all(self.__style_str__())
         return r
     
     def __style_str__(self, style=None):
@@ -188,8 +188,7 @@ class TrueColor:
             for k,(c,_) in self.registered_colors.items():
                 if c == csi:
                     return k
-            else:
-                return None
+            return None
         
     def register(self, name, rgb):
         c = self.__getitem__(rgb, exclude_prefix=True)
@@ -239,7 +238,7 @@ class TrueColor:
             if isinstance(color, (tuple, list)):
                 assert len(color) == 3, "expected sequence of 3 numbers"
                 if any(isinstance(v,float) for v in color):
-                    color = (int(v*255) for v in color)
+                    color = [int(v*255) for v in color]
                 assert all(v>=0 and v<=255 for v in color), "value out of range"
                 r,g,b = color
                 prefix = "" if exclude_prefix else "\x1b[38"

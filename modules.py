@@ -224,7 +224,7 @@ class ForEach(_nn.Sequential):
         if isinstance(x, _torch.Tensor):
             if len(r):
                 s = r[0].shape
-                if all(v.shape == s for v in s[1:]):
+                if all(v.shape == s for v in r[1:]):
                     return _torch.stack(r)
         return r
 class Tee(_nn.Sequential):
@@ -765,9 +765,9 @@ class Pop(StackAccess):
         elif reduction == "mul":
             return r * x    
         elif reduction == "max":
-            return torch.maximum(x,r)
+            return _torch.maximum(x,r)
         elif reduction == "min":
-            return torch.minimum(x,r)
+            return _torch.minimum(x,r)
         elif reduction == "mean":
             return x.add(r).div(2)
         elif reduction == "cat":
@@ -826,11 +826,11 @@ class ELUPow(_nn.Module):
 
 class ReLUSquared(ReLUPow):
     def __init__(self, alpha=1.0):
-        super().__init__(self, 2.0, alpha)
-        
+        super().__init__(2.0, alpha)
+
 class ELUSquared(ELUPow):
     def __init__(self, alpha=1.0):
-        super().__init__(self, 2.0, alpha)
+        super().__init__(2.0, alpha)
         
 class RecurrentBatchNorm2d(_nn.Module):
     def __init__(self, n, *args, **kwargs):
