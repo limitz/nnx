@@ -863,19 +863,109 @@ class Between:
             return _Fx.sample_between(a, b, n, self.inclusive)
 
 
+class CausalConv1d(_nn.Conv1d):
+    def forward(self, x):
+        p = self.kernel_size[0] // 2
+        x = _F.pad(x, (p, 0))
+        x = super().forward(x)
+        return x[..., :x.shape[-1]-p]
+
+
+class CausalConv2d(_nn.Conv2d):
+    def __init__(self, *args, direction="xy", **kwargs):
+        super().__init__(*args, **kwargs)
+        assert direction in {"x", "y", "xy"}
+        self.direction = direction
+
+    def forward(self, x):
+        py = self.kernel_size[0] // 2 if "y" in self.direction else 0
+        px = self.kernel_size[1] // 2 if "x" in self.direction else 0
+        x = _F.pad(x, (px, 0, py, 0))
+        x = super().forward(x)
+        return x[..., :x.shape[-2]-py, :x.shape[-1]-px]
+
+
+class CausalNorm1d(_nn.Module):
+    def __init__(self, groups=1, num_features=None, dim=-1, eps=1e-10, affine=None):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.groups = groups
+        self.num_features = num_features
+        if affine is None:
+            affine = num_features is not None
+        self.affine = affine
+        if affine:
+            assert num_features is not None
+            self.weight = _nn.Parameter(_torch.ones(num_features))
+            self.bias = _nn.Parameter(_torch.zeros(num_features))
+        else:
+            self.weight = None
+            self.bias = None
+
+    def forward(self, x):
+        token_dim = self.dim % x.dim()
+        channel_dim = token_dim - 1
+        num_channels = x.size(channel_dim)
+        group_size = num_channels // self.groups
+        seq_len = x.size(-1)
+
+        x = x.unflatten(channel_dim, (self.groups, group_size))
+        t = _torch.arange(1, seq_len + 1, dtype=x.dtype, device=x.device).view(1, 1, 1, seq_len)
+
+        channel_sum = x.sum(dim=-2, keepdim=True)
+        mean = channel_sum.cumsum(dim=-1) / (group_size * t)
+        var = (x.pow(2).sum(dim=-2, keepdim=True).cumsum(dim=-1) / (group_size * t) - mean.pow(2)).clamp(min=0)
+
+        x = (x - mean) / (var + self.eps).sqrt()
+        x = x.flatten(channel_dim, channel_dim + 1)
+
+        if self.weight is not None:
+            x = x * self.weight.view(-1, 1) + self.bias.view(-1, 1)
+        return x
+
+    def extra_repr(self):
+        r = f"groups={self.groups}"
+        if self.num_features is not None:
+            r += f", num_features={self.num_features}"
+        r += f", affine={self.affine}"
+        if self.dim != -1:
+            r += f", dim={self.dim}"
+        return r
+
+
 class Parse2d(_nn.Sequential):
-    def __init__(self, string, hidden_dim=None):
+    def __init__(self, string, hidden_dim=None, kernel_size=3):
         self.string = string
         self.hidden_dim = hidden_dim
-        super().__init__(*_parse_block(string, hidden_dim))
+        self.kernel_size = kernel_size
+        super().__init__(*_parse_block(string, hidden_dim, dim=2, kernel_size=kernel_size))
 
     def extra_repr(self):
         if self.hidden_dim is not None:
             return f"string=\"{self.string}\", hidden_dim={self.hidden_dim}"
         else:
             return f"string=\"{self.string}\""
-            
-def _parse_block(config, hidden_dim=None):
+
+class Parse1d(_nn.Sequential):
+    def __init__(self, string, hidden_dim=None, kernel_size=3):
+        self.string = string
+        self.hidden_dim = hidden_dim
+        self.kernel_size = kernel_size
+        super().__init__(*_parse_block(string, hidden_dim, dim=1, kernel_size=kernel_size))
+
+    def extra_repr(self):
+        if self.hidden_dim is not None:
+            return f"string=\"{self.string}\", hidden_dim={self.hidden_dim}"
+        else:
+            return f"string=\"{self.string}\""
+
+def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
+    ConvNd = getattr(_nn, f"Conv{dim}d")
+    InstanceNormNd = getattr(_nn, f"InstanceNorm{dim}d")
+    BatchNormNd = getattr(_nn, f"BatchNorm{dim}d")
+    ks = kernel_size
+    pad = (ks - 1) // 2
     s = [[]]
     i = o = hidden_dim
     for idx in range(len(config)):
@@ -888,30 +978,34 @@ def _parse_block(config, hidden_dim=None):
                 if "," in v:
                     i,o = [int(vv) for vv in v.split(",")]
                 else:
-                    o = int(v)  
+                    o = int(v)
                 idx = idx + 1 + e
 
         if c == "[":
             e = config[idx:].index("]")
             v = config[idx+1:idx+e]
-            i = o = int(v)  
+            i = o = int(v)
             idx = idx + e
         elif c == "C":
-            s[-1].append(_nn.Conv2d(i, o, 3, padding=1))
+            s[-1].append(ConvNd(i, o, ks, padding=pad))
             i = o
         elif c == "c":
-            s[-1].append(_nn.Conv2d(i, o, 3, padding=1, bias=False))
+            s[-1].append(ConvNd(i, o, ks, padding=pad, bias=False))
             i = o
         elif c == "L":
-            s[-1].append(_nn.Conv2d(i, o, 1))
+            s[-1].append(ConvNd(i, o, 1))
             i = o
         elif c == "l":
-            s[-1].append(_nn.Conv2d(i, o, 1, bias=False))
+            s[-1].append(ConvNd(i, o, 1, bias=False))
             i = o
+        elif c == "B":
+            s[-1].append(BatchNormNd(i))
+        elif c == "b":
+            s[-1].append(BatchNormNd(i, affine=False))
         elif c == "I":
-            s[-1].append(_nn.InstanceNorm2d(i, affine=True))
+            s[-1].append(InstanceNormNd(i, affine=True))
         elif c == "i":
-            s[-1].append(_nn.InstanceNorm2d(i, affine=False))
+            s[-1].append(InstanceNormNd(i, affine=False))
         elif c == "N":
             s[-1].append(_nn.GroupNorm(o,i,affine=True))
             o = i
