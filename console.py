@@ -372,6 +372,16 @@ def csi_render(arg, control="<>"):
     arg = _re.sub(pat, _re_find_color, arg)
     return arg
     
+def _style_module_repr(s):
+    s = _re.sub(r'\b(\d+(?:\.\d+)?)(?!\):)\b', r'<orange>\1</>', s)
+    s = _re.sub(r'\((\w+)\):', r'<gray>(\1)</>:', s)
+    s = _re.sub(r'\b([A-Z]\w*)\(', r'<cyan>\1</>(', s)
+    s = _re.sub(r'\b([a-z_]\w*)=', r'<white>\1</>=', s)
+
+    return s
+
+_nn.Module.__style_str__ = lambda self, style=None: _style_module_repr(repr(self))
+
 _original_print = print
 def print(*args, control="<>", style=True, **kwargs):
     r = []
