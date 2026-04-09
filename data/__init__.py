@@ -5,6 +5,7 @@ import glob as _glob
 import tifffile as _tifffile
 from .widerface import WIDERface as WIDERface
 from .random import RandomNd as RandomNd
+from .puzzle import TeleportDataset as TeleportDataset
 from .. import functional as _Fx
 
 class DatasetProxyWithIndex(_torch.utils.data.Dataset):
