@@ -36,11 +36,13 @@ class EMA:
 
     @property
     def mean(self):
-        return self.x[1] / (self.x[0]+self.correction)
+        denom = self.x[0] + self.correction
+        return self.x[1] / denom if denom else 0.0
 
     @property
     def std(self):
-        return (self.x[2] / (self.x[0]+self.correction)) ** 0.5
+        denom = self.x[0] + self.correction
+        return (self.x[2] / denom) ** 0.5 if denom else 0.0
 
     def __str__(self):
         r = strip_all(self.__style_str__())
