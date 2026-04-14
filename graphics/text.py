@@ -214,8 +214,7 @@ ALIENS = {
 
 DEFAULT = DEFAULT_12X6
 
-def TTF(ttf_path: str, size: int = 16,
-        dtype: _torch.dtype = _torch.bool) -> dict[str, _torch.Tensor]:
+def TTF(ttf_path, size=16, dtype=_torch.bool):
     """
     Read a .ttf file and return a dict mapping each printable ASCII character
     to a glyph tensor of shape (H, W).

@@ -255,16 +255,22 @@ def _re_find_color(match):
     return color[name]
 
 def is_csi_token(c):
-    return c.startswith("\x1b") and c.endswith("m")
+    return c.startswith("\x1b") and (c.endswith("m") or c.endswith("K"))
 
 def is_control_token(c, control="<>"):
     return c.startswith(control[0]) and c.endswith(control[1])
     
+def _csi_end(arg):
+    for i, c in enumerate(arg):
+        if c in {"m", "K"}:
+            return i
+    return -1
+
 def csi_split(arg):
     r = []
     while len(arg) > 0:
         if arg[0] == "\x1b":
-            end = arg.index("m")
+            end = _csi_end(arg)
             assert end > 0
             r.append(arg[:end+1])
             arg = arg[end+1:]
@@ -281,7 +287,7 @@ def csi_tokenize(arg):
     r = []
     while len(arg) > 0:
         if arg[0] == "\x1b":
-            end = arg.index("m")
+            end = _csi_end(arg)
             r.append(arg[:end+1])
             arg = arg[end+1:]
         else:

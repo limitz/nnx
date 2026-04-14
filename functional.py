@@ -818,3 +818,33 @@ def glob(*args, order_by="name", **kwargs):
         elif any(s in { "modified", "modification", "time" } for s in order_by):
             r = sorted(r, key=_os.path.getmtime, reverse=reverse)
     return r
+
+def in_notebook():
+    try:
+        from IPython import get_ipython
+        shell = get_ipython()
+        if shell is None:
+            return False
+        return shell.__class__.__name__ == "ZMQInteractiveShell"
+    except ImportError:
+        return False
+
+def notebook_path():
+    if not in_notebook():
+        return None
+    from IPython import get_ipython
+    shell = get_ipython()
+    # VS Code sets this global in notebook kernels
+    path = shell.user_ns.get("__vsc_ipynb_file__")
+    if path is not None:
+        return path
+    # Jupyter sets JPY_SESSION_FILE pointing to the session json
+    session_file = _os.environ.get("JPY_SESSION_FILE")
+    if session_file and _os.path.isfile(session_file):
+        import json
+        with open(session_file) as f:
+            session = json.load(f)
+        path = session.get("path")
+        if path:
+            return _os.path.abspath(path)
+    return None

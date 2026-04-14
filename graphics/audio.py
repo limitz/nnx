@@ -1,7 +1,10 @@
 import torch as _torch
 import torch.nn as _nn
 import torch.nn.functional as _F
-import torchaudio as _torchaudio
+try:
+    import torchaudio as _torchaudio
+except (ImportError, OSError):
+    _torchaudio = None
 import math as _math
 import matplotlib.pyplot as _plt
 import IPython.display as _ipy_display
