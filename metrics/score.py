@@ -51,6 +51,21 @@ def matthews(pred, target):
     return numer / denom
 
 
+def exact_match(pred, target, question_ids):
+    """MultiRC EM: fraction of questions whose full option-set is predicted correctly."""
+    pred = pred.long().flatten()
+    target = target.long().flatten()
+    question_ids = question_ids.flatten()
+
+    uniq, inverse = _torch.unique(question_ids, return_inverse=True)
+    mismatch = (pred != target).long()
+
+    wrong_per_q = _torch.zeros(len(uniq), dtype=_torch.long, device=pred.device)
+    wrong_per_q.index_add_(0, inverse, mismatch)
+
+    return (wrong_per_q == 0).float().mean()
+
+
 def spearman(pred, target):
     """Spearman rank correlation via Pearson correlation of ranks."""
     pred = pred.float().flatten()
