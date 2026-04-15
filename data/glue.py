@@ -1,21 +1,21 @@
-import os
-import urllib.request
-import pyarrow.parquet as pq
-from torch.utils.data import Dataset
+import os as _os
+import urllib.request as _urllib_request
+import pyarrow.parquet as _pq
+import torch as _torch
 
 _URL_GLUE = "https://huggingface.co/datasets/nyu-mll/glue/resolve/main/{task}/{file}"
 
 
 def _load_glue_parquet(task, filename, root):
-    os.makedirs(root, exist_ok=True)
-    path = os.path.join(root, f"glue_{task}_{filename}")
-    if not os.path.exists(path):
+    _os.makedirs(root, exist_ok=True)
+    path = _os.path.join(root, f"glue_{task}_{filename}")
+    if not _os.path.exists(path):
         print(f"Downloading GLUE {task} {filename}...")
-        urllib.request.urlretrieve(_URL_GLUE.format(task=task, file=filename), path)
-    return pq.read_table(path).to_pylist()
+        _urllib_request.urlretrieve(_URL_GLUE.format(task=task, file=filename), path)
+    return _pq.read_table(path).to_pylist()
 
 
-class CoLA(Dataset):
+class CoLA(_torch.utils.data.Dataset):
     """Corpus of Linguistic Acceptability. Single sentence grammatical acceptability.
 
     Each item is a (sentence, label) tuple:
@@ -36,7 +36,7 @@ class CoLA(Dataset):
         return self.examples[idx]
 
 
-class SST2(Dataset):
+class SST2(_torch.utils.data.Dataset):
     """Stanford Sentiment Treebank, binary. Single sentence sentiment classification.
 
     Each item is a (sentence, label) tuple:
@@ -57,7 +57,7 @@ class SST2(Dataset):
         return self.examples[idx]
 
 
-class MRPC(Dataset):
+class MRPC(_torch.utils.data.Dataset):
     """Microsoft Research Paraphrase Corpus. Sentence pair paraphrase detection.
 
     Each item is a (sentence1, sentence2, label) tuple:
@@ -79,7 +79,7 @@ class MRPC(Dataset):
         return self.examples[idx]
 
 
-class STSB(Dataset):
+class STSB(_torch.utils.data.Dataset):
     """Semantic Textual Similarity Benchmark. Sentence pair similarity regression.
 
     Each item is a (sentence1, sentence2, label) tuple:
@@ -101,7 +101,7 @@ class STSB(Dataset):
         return self.examples[idx]
 
 
-class QQP(Dataset):
+class QQP(_torch.utils.data.Dataset):
     """Quora Question Pairs. Duplicate question detection.
 
     Each item is a (question1, question2, label) tuple:
@@ -123,7 +123,7 @@ class QQP(Dataset):
         return self.examples[idx]
 
 
-class MNLI(Dataset):
+class MNLI(_torch.utils.data.Dataset):
     """Multi-Genre Natural Language Inference. Sentence pair 3-way classification.
 
     Each item is a (premise, hypothesis, label) tuple:
@@ -145,7 +145,7 @@ class MNLI(Dataset):
         return self.examples[idx]
 
 
-class QNLI(Dataset):
+class QNLI(_torch.utils.data.Dataset):
     """Question Natural Language Inference. Question-sentence entailment.
 
     Each item is a (question, sentence, label) tuple:
@@ -167,7 +167,7 @@ class QNLI(Dataset):
         return self.examples[idx]
 
 
-class RTE(Dataset):
+class RTE(_torch.utils.data.Dataset):
     """Recognizing Textual Entailment. Sentence pair binary entailment.
 
     Each item is a (sentence1, sentence2, label) tuple:

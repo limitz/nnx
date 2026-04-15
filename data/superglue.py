@@ -1,21 +1,21 @@
-import os
-import urllib.request
-import pyarrow.parquet as pq
-from torch.utils.data import Dataset
+import os as _os
+import urllib.request as _urllib_request
+import pyarrow.parquet as _pq
+import torch as _torch
 
 _URL_SUPERGLUE = "https://huggingface.co/datasets/aps/super_glue/resolve/main/{task}/{file}"
 
 
 def _load_superglue_parquet(task, filename, root):
-    os.makedirs(root, exist_ok=True)
-    path = os.path.join(root, f"superglue_{task}_{filename}")
-    if not os.path.exists(path):
+    _os.makedirs(root, exist_ok=True)
+    path = _os.path.join(root, f"superglue_{task}_{filename}")
+    if not _os.path.exists(path):
         print(f"Downloading SuperGLUE {task} {filename}...")
-        urllib.request.urlretrieve(_URL_SUPERGLUE.format(task=task, file=filename), path)
-    return pq.read_table(path).to_pylist()
+        _urllib_request.urlretrieve(_URL_SUPERGLUE.format(task=task, file=filename), path)
+    return _pq.read_table(path).to_pylist()
 
 
-class BoolQ(Dataset):
+class BoolQ(_torch.utils.data.Dataset):
     """Boolean Questions. Passage + yes/no question binary classification.
 
     Each item is a (passage, question, label) tuple:
@@ -37,7 +37,7 @@ class BoolQ(Dataset):
         return self.examples[idx]
 
 
-class CB(Dataset):
+class CB(_torch.utils.data.Dataset):
     """CommitmentBank. Premise-hypothesis 3-way NLI.
 
     Each item is a (premise, hypothesis, label) tuple:
@@ -59,7 +59,7 @@ class CB(Dataset):
         return self.examples[idx]
 
 
-class COPA(Dataset):
+class COPA(_torch.utils.data.Dataset):
     """Choice of Plausible Alternatives. Causal reasoning 2-way selection.
 
     Each item is a (premise, choice1, choice2, question, label) tuple:
@@ -83,7 +83,7 @@ class COPA(Dataset):
         return self.examples[idx]
 
 
-class MultiRC(Dataset):
+class MultiRC(_torch.utils.data.Dataset):
     """Multi-Sentence Reading Comprehension. Multi-answer QA.
 
     Each item is a (paragraph, question, answer, label, question_id) tuple:
@@ -111,7 +111,7 @@ class MultiRC(Dataset):
         return self.examples[idx]
 
 
-class ReCoRD(Dataset):
+class ReCoRD(_torch.utils.data.Dataset):
     """Reading Comprehension with Commonsense Reasoning. Cloze-style entity QA.
 
     Each item is a (passage, query, entities, answers) tuple:
@@ -134,7 +134,7 @@ class ReCoRD(Dataset):
         return self.examples[idx]
 
 
-class RTE(Dataset):
+class RTE(_torch.utils.data.Dataset):
     """Recognizing Textual Entailment. Sentence pair binary entailment.
 
     Each item is a (premise, hypothesis, label) tuple:
@@ -156,7 +156,7 @@ class RTE(Dataset):
         return self.examples[idx]
 
 
-class WiC(Dataset):
+class WiC(_torch.utils.data.Dataset):
     """Word in Context. Word-sense disambiguation across two sentences.
 
     Each item is a (word, sentence1, sentence2, label) tuple:
@@ -179,7 +179,7 @@ class WiC(Dataset):
         return self.examples[idx]
 
 
-class WSC(Dataset):
+class WSC(_torch.utils.data.Dataset):
     """Winograd Schema Challenge. Pronoun coreference binary classification.
 
     Each item is a (text, span1_text, span2_text, label) tuple:

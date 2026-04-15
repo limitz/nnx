@@ -7,7 +7,7 @@ Two variants are provided, both fitting within 256 ids so they can be stored as 
 Use ``CharTokenizer.from_pretrained(name)`` or ``load_tokenizer(name)`` as a drop-in
 replacement for ``AutoTokenizer.from_pretrained(name)``.
 """
-import torch
+import torch as _torch
 
 
 _SPECIAL_TOKENS = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]", "[BOS]", "[EOS]"]
@@ -74,7 +74,7 @@ class CharTokenizer:
         return ids
 
     def decode(self, ids, skip_special_tokens=False, **kwargs):
-        if isinstance(ids, torch.Tensor):
+        if isinstance(ids, _torch.Tensor):
             ids = ids.tolist()
         pieces = []
         for i in ids:
@@ -101,5 +101,5 @@ def is_char_tokenizer_name(name):
 def load_tokenizer(name):
     if is_char_tokenizer_name(name):
         return CharTokenizer.from_pretrained(name)
-    from transformers import AutoTokenizer
-    return AutoTokenizer.from_pretrained(name)
+    import transformers as _transformers
+    return _transformers.AutoTokenizer.from_pretrained(name)
