@@ -1,5 +1,23 @@
 import torch as _torch
 import torchvision as _torchvision
+from ..graphics.maze import render_maze as _render_maze
+
+
+class MazeDataset(_torch.utils.data.Dataset):
+    def __init__(self, length=1024, size=(16, 16), colorspace="palette"):
+        self.length = length
+        self.size = size
+        self.colorspace = colorspace
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        challenge, target = _render_maze(size=self.size, colorspace=self.colorspace)
+        if self.colorspace == "palette":
+            challenge = challenge.squeeze(0)
+            target = target.squeeze(0)
+        return challenge, target
 
 
 class TeleportDataset(_torch.utils.data.Dataset):

@@ -63,5 +63,8 @@ def render_maze(size=(16,16), colorspace="palette"):
     target = _F.pad(target,(1,0,1,0))
     if colorspace == "rgb":
         return _text.palette_to_rgb(challenge), _text.palette_to_rgb(target)
+    elif colorspace == "mono":
+        mono = _torch.tensor([0.1, 0.66, 1.0], dtype=_torch.float32, device=challenge.device)
+        return mono[challenge], mono[target]
     else:
         return challenge, target
