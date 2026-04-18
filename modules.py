@@ -845,7 +845,278 @@ class RecurrentBatchNorm2d(_nn.Module):
         r = self.inner[self.cursor](x)
         self.cursor += 1
         return r
-        
+
+
+# --- Normalization layers with optional complex (cfloat/cdouble) dtype ---
+# For complex dtypes, mean is complex and variance is real (E[|x-mean|^2]),
+# so std is real and division is well defined. Affine weight/bias are complex.
+
+def _is_complex_dtype(dtype):
+    return dtype in {_torch.cfloat, _torch.cdouble}
+
+def _real_dtype_of(dtype):
+    return _torch.double if dtype == _torch.cdouble else _torch.float
+
+def _moments(x, dims, is_complex, keepdim=True):
+    mean = x.mean(dims, keepdim=keepdim)
+    centered = x - (mean if keepdim else mean.view(
+        [x.shape[i] if i not in dims else 1 for i in range(x.dim())]))
+    if is_complex:
+        var = centered.real.pow(2).mean(dims, keepdim=keepdim) \
+            + centered.imag.pow(2).mean(dims, keepdim=keepdim)
+    else:
+        var = centered.pow(2).mean(dims, keepdim=keepdim)
+    return mean, var, centered
+
+
+class BatchNormNd(_nn.Module):
+    _allowed_ranks = None
+
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
+                 track_running_stats=True, device=None, dtype=_torch.float):
+        super().__init__()
+        if dtype is None: dtype = _torch.float
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+        self.dtype = dtype
+        self.is_complex = _is_complex_dtype(dtype)
+        var_dtype = _real_dtype_of(dtype) if self.is_complex else dtype
+
+        if affine:
+            self.weight = _nn.Parameter(_torch.ones(num_features, dtype=dtype, device=device))
+            self.bias = _nn.Parameter(_torch.zeros(num_features, dtype=dtype, device=device))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+        if track_running_stats:
+            self.register_buffer("running_mean", _torch.zeros(num_features, dtype=dtype, device=device))
+            self.register_buffer("running_var", _torch.ones(num_features, dtype=var_dtype, device=device))
+            self.register_buffer("num_batches_tracked",
+                                 _torch.tensor(0, dtype=_torch.long, device=device))
+        else:
+            self.register_buffer("running_mean", None)
+            self.register_buffer("running_var", None)
+            self.register_buffer("num_batches_tracked", None)
+
+    def forward(self, x):
+        if self._allowed_ranks is not None:
+            assert x.dim() in self._allowed_ranks, \
+                f"expected input rank in {self._allowed_ranks}, got {x.dim()}"
+        dims = [0] + list(range(2, x.dim()))
+        view = [1, -1] + [1] * (x.dim() - 2)
+        use_running = (not self.training) and self.track_running_stats
+
+        if use_running:
+            mean_v = self.running_mean.view(view)
+            var_v = self.running_var.view(view)
+            centered = x - mean_v
+        else:
+            mean, var, centered = _moments(x, dims, self.is_complex, keepdim=True)
+            mean_v, var_v = mean, var
+            if self.training and self.track_running_stats:
+                with _torch.no_grad():
+                    m = mean.detach().view(-1)
+                    v = var.detach().view(-1)
+                    self.running_mean.mul_(1 - self.momentum).add_(m * self.momentum)
+                    self.running_var.mul_(1 - self.momentum).add_(v * self.momentum)
+                    self.num_batches_tracked.add_(1)
+
+        out = centered / (var_v + self.eps).sqrt()
+        if self.affine:
+            out = out * self.weight.view(view) + self.bias.view(view)
+        return out
+
+    def extra_repr(self):
+        r = f"{self.num_features}, eps={self.eps}, momentum={self.momentum}"
+        r += f", affine={self.affine}, track_running_stats={self.track_running_stats}"
+        if self.dtype != _torch.float:
+            r += f", dtype={self.dtype}"
+        return r
+
+
+class BatchNorm1d(BatchNormNd):
+    _allowed_ranks = (2, 3)
+
+class BatchNorm2d(BatchNormNd):
+    _allowed_ranks = (4,)
+
+class BatchNorm3d(BatchNormNd):
+    _allowed_ranks = (5,)
+
+
+class InstanceNormNd(_nn.Module):
+    _allowed_ranks = None
+
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=False,
+                 track_running_stats=False, device=None, dtype=_torch.float):
+        super().__init__()
+        if dtype is None: dtype = _torch.float
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+        self.dtype = dtype
+        self.is_complex = _is_complex_dtype(dtype)
+        var_dtype = _real_dtype_of(dtype) if self.is_complex else dtype
+
+        if affine:
+            self.weight = _nn.Parameter(_torch.ones(num_features, dtype=dtype, device=device))
+            self.bias = _nn.Parameter(_torch.zeros(num_features, dtype=dtype, device=device))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+        if track_running_stats:
+            self.register_buffer("running_mean", _torch.zeros(num_features, dtype=dtype, device=device))
+            self.register_buffer("running_var", _torch.ones(num_features, dtype=var_dtype, device=device))
+            self.register_buffer("num_batches_tracked",
+                                 _torch.tensor(0, dtype=_torch.long, device=device))
+        else:
+            self.register_buffer("running_mean", None)
+            self.register_buffer("running_var", None)
+            self.register_buffer("num_batches_tracked", None)
+
+    def forward(self, x):
+        if self._allowed_ranks is not None:
+            assert x.dim() in self._allowed_ranks, \
+                f"expected input rank in {self._allowed_ranks}, got {x.dim()}"
+        dims = list(range(2, x.dim()))
+        view = [1, -1] + [1] * (x.dim() - 2)
+        use_running = (not self.training) and self.track_running_stats
+
+        if use_running:
+            mean_v = self.running_mean.view(view)
+            var_v = self.running_var.view(view)
+            centered = x - mean_v
+        elif not dims:
+            centered = _torch.zeros_like(x)
+            var_v = _torch.zeros(1, dtype=_real_dtype_of(self.dtype) if self.is_complex else self.dtype,
+                                 device=x.device)
+            mean_v = x  # unused
+        else:
+            mean, var, centered = _moments(x, dims, self.is_complex, keepdim=True)
+            mean_v, var_v = mean, var
+            if self.training and self.track_running_stats:
+                with _torch.no_grad():
+                    m = mean.view(x.shape[0], x.shape[1]).mean(0).detach()
+                    v = var.view(x.shape[0], x.shape[1]).mean(0).detach()
+                    self.running_mean.mul_(1 - self.momentum).add_(m * self.momentum)
+                    self.running_var.mul_(1 - self.momentum).add_(v * self.momentum)
+                    self.num_batches_tracked.add_(1)
+
+        out = centered / (var_v + self.eps).sqrt()
+        if self.affine:
+            out = out * self.weight.view(view) + self.bias.view(view)
+        return out
+
+    def extra_repr(self):
+        r = f"{self.num_features}, eps={self.eps}, momentum={self.momentum}"
+        r += f", affine={self.affine}, track_running_stats={self.track_running_stats}"
+        if self.dtype != _torch.float:
+            r += f", dtype={self.dtype}"
+        return r
+
+
+class InstanceNorm1d(InstanceNormNd):
+    _allowed_ranks = (2, 3)
+
+class InstanceNorm2d(InstanceNormNd):
+    _allowed_ranks = (4,)
+
+class InstanceNorm3d(InstanceNormNd):
+    _allowed_ranks = (5,)
+
+
+class LayerNorm(_nn.Module):
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True,
+                 bias=True, device=None, dtype=_torch.float):
+        super().__init__()
+        if dtype is None: dtype = _torch.float
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        self.dtype = dtype
+        self.is_complex = _is_complex_dtype(dtype)
+
+        if elementwise_affine:
+            self.weight = _nn.Parameter(_torch.ones(self.normalized_shape, dtype=dtype, device=device))
+            if bias:
+                self.bias = _nn.Parameter(_torch.zeros(self.normalized_shape, dtype=dtype, device=device))
+            else:
+                self.register_parameter("bias", None)
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+    def forward(self, x):
+        n = len(self.normalized_shape)
+        assert tuple(x.shape[-n:]) == self.normalized_shape, \
+            f"expected last {n} dims to be {self.normalized_shape}, got {tuple(x.shape[-n:])}"
+        dims = list(range(x.dim() - n, x.dim()))
+        _, var, centered = _moments(x, dims, self.is_complex, keepdim=True)
+        out = centered / (var + self.eps).sqrt()
+        if self.elementwise_affine:
+            out = out * self.weight
+            if self.bias is not None:
+                out = out + self.bias
+        return out
+
+    def extra_repr(self):
+        r = f"{self.normalized_shape}, eps={self.eps}"
+        r += f", elementwise_affine={self.elementwise_affine}"
+        if self.dtype != _torch.float:
+            r += f", dtype={self.dtype}"
+        return r
+
+
+class GroupNorm(_nn.Module):
+    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True,
+                 device=None, dtype=_torch.float):
+        super().__init__()
+        if dtype is None: dtype = _torch.float
+        assert num_channels % num_groups == 0, \
+            "num_channels must be divisible by num_groups"
+        self.num_groups = num_groups
+        self.num_channels = num_channels
+        self.eps = eps
+        self.affine = affine
+        self.dtype = dtype
+        self.is_complex = _is_complex_dtype(dtype)
+
+        if affine:
+            self.weight = _nn.Parameter(_torch.ones(num_channels, dtype=dtype, device=device))
+            self.bias = _nn.Parameter(_torch.zeros(num_channels, dtype=dtype, device=device))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+    def forward(self, x):
+        assert x.shape[1] == self.num_channels
+        N, C = x.shape[0], x.shape[1]
+        spatial = x.shape[2:]
+        grouped = x.reshape(N, self.num_groups, C // self.num_groups, *spatial)
+        dims = list(range(2, grouped.dim()))
+        _, var, centered = _moments(grouped, dims, self.is_complex, keepdim=True)
+        out = (centered / (var + self.eps).sqrt()).reshape(N, C, *spatial)
+        if self.affine:
+            view = [1, -1] + [1] * (x.dim() - 2)
+            out = out * self.weight.view(view) + self.bias.view(view)
+        return out
+
+    def extra_repr(self):
+        r = f"{self.num_groups}, {self.num_channels}, eps={self.eps}, affine={self.affine}"
+        if self.dtype != _torch.float:
+            r += f", dtype={self.dtype}"
+        return r
+
+
 class Between:
     def __init__(self, a, b, n=(), inclusive=True):
         self.a = a
@@ -934,6 +1205,8 @@ class CausalNorm1d(_nn.Module):
         return r
 
 
+
+
 class Parse2d(_nn.Sequential):
     def __init__(self, string, hidden_dim=None, kernel_size=3):
         self.string = string
@@ -962,12 +1235,13 @@ class Parse1d(_nn.Sequential):
 
 def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
     ConvNd = getattr(_nn, f"Conv{dim}d")
-    InstanceNormNd = getattr(_nn, f"InstanceNorm{dim}d")
-    BatchNormNd = getattr(_nn, f"BatchNorm{dim}d")
+    InstanceNormCls = globals()[f"InstanceNorm{dim}d"]
+    BatchNormCls = globals()[f"BatchNorm{dim}d"]
     ks = kernel_size
     pad = (ks - 1) // 2
     s = [[]]
     i = o = hidden_dim
+    dtype = _torch.float
     for idx in range(len(config)):
         c = config[idx]
         d = config[idx+1] if idx < len(config)-1 else None
@@ -987,36 +1261,43 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
             i = o = int(v)
             idx = idx + e
         elif c == "C":
-            s[-1].append(ConvNd(i, o, ks, padding=pad))
+            s[-1].append(ConvNd(i, o, ks, padding=pad, dtype=dtype))
             i = o
         elif c == "c":
-            s[-1].append(ConvNd(i, o, ks, padding=pad, bias=False))
+            s[-1].append(ConvNd(i, o, ks, padding=pad, dtype=dtype, bias=False))
+            i = o
+        elif c == "z":
+            dtype = _torch.cfloat
+            s[-1].append(To(dtype))
             i = o
         elif c == "L":
-            s[-1].append(ConvNd(i, o, 1))
+            s[-1].append(ConvNd(i, o, 1, dtype=dtype))
             i = o
         elif c == "l":
-            s[-1].append(ConvNd(i, o, 1, bias=False))
+            s[-1].append(ConvNd(i, o, 1, dtype=dtype, bias=False))
             i = o
         elif c == "B":
-            s[-1].append(BatchNormNd(i))
+            s[-1].append(BatchNormCls(i, dtype=dtype))
         elif c == "b":
-            s[-1].append(BatchNormNd(i, affine=False))
+            s[-1].append(BatchNormCls(i, dtype=dtype, affine=False))
         elif c == "I":
-            s[-1].append(InstanceNormNd(i, affine=True))
+            s[-1].append(InstanceNormCls(i, dtype=dtype, affine=True))
         elif c == "i":
-            s[-1].append(InstanceNormNd(i, affine=False))
+            s[-1].append(InstanceNormCls(i, dtype=dtype, affine=False))
         elif c == "N":
-            s[-1].append(_nn.GroupNorm(o,i,affine=True))
+            s[-1].append(GroupNorm(o, i, dtype=dtype, affine=True))
             o = i
         elif c == "n":
-            s[-1].append(_nn.GroupNorm(o,i,affine=False))
+            s[-1].append(GroupNorm(o, i, dtype=dtype, affine=False))
             o = i
         elif c == "E":
+            assert dtype not in {_torch.cfloat, _torch.cdouble}
             s[-1].append(_nn.ELU())
         elif c == "R":
+            assert dtype not in {_torch.cfloat, _torch.cdouble}
             s[-1].append(_nn.ReLU())
         elif c == "G":
+            assert dtype not in {_torch.cfloat, _torch.cdouble}
             s[-1].append(_nn.GELU())
         elif c == "S":
             s[-1].append(_nn.Sigmoid())
