@@ -44,9 +44,11 @@ def yuv_to_rgb(yuv, clamp=True, **kwargs):
 def feature_to_yuv(v, norm="std_mean", scale=None, rotations=1, **kwargs):
     c = v.shape[-3]
     scale = scale or 0.6
+    # evenly spaced rotations on the unit circle; avoid endpoint duplication
+    # that linspace(0, 2pi, c) produces for small c (e.g. c=2 -> [1+0j, 1+0j])
     z = _torch.polar(
-        _torch.ones(c), 
-        _torch.linspace(0, rotations*2*_math.pi, c))
+        _torch.ones(c),
+        _torch.arange(c, dtype=_torch.float) * (rotations * 2 * _math.pi / c))
     v = (v * z.to(v.device).view(-1,1,1)).sum(-3)
     if norm == "center":
         v = v.div(v.std().add(1e-8))/2
@@ -55,7 +57,7 @@ def feature_to_yuv(v, norm="std_mean", scale=None, rotations=1, **kwargs):
 
     v = v * scale
     v = v.tanh()
-    a = v.abs() 
+    a = v.abs()
     v = _torch.stack((a, v.real, v.imag), -3)
     return v
     
