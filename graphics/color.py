@@ -44,11 +44,13 @@ def yuv_to_rgb(yuv, clamp=True, **kwargs):
 def feature_to_yuv(v, norm="std_mean", scale=None, rotations=1, **kwargs):
     c = v.shape[-3]
     scale = scale or 0.6
-    # evenly spaced rotations on the unit circle; avoid endpoint duplication
-    # that linspace(0, 2pi, c) produces for small c (e.g. c=2 -> [1+0j, 1+0j])
+    # rotations span [0, pi) rather than [0, 2pi) because real-valued channels
+    # already cover both signs: a rotation of pi is equivalent to negating the
+    # channel, so spanning 2pi makes channel i value -x indistinguishable from
+    # channel (i + c/2) value +x.
     z = _torch.polar(
         _torch.ones(c),
-        _torch.arange(c, dtype=_torch.float) * (rotations * 2 * _math.pi / c))
+        _torch.arange(c, dtype=_torch.float) * (rotations * _math.pi / c))
     v = (v * z.to(v.device).view(-1,1,1)).sum(-3)
     if norm == "center":
         v = v.div(v.std().add(1e-8))/2
