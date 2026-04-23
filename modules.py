@@ -1245,6 +1245,19 @@ class Parse1d(_nn.Sequential):
         else:
             return f"string=\"{self.string}\""
 
+class Parse3d(_nn.Sequential):
+    def __init__(self, string, hidden_dim=None, kernel_size=3):
+        self.string = string
+        self.hidden_dim = hidden_dim
+        self.kernel_size = kernel_size
+        super().__init__(*_parse_block(string, hidden_dim, dim=3, kernel_size=kernel_size))
+
+    def extra_repr(self):
+        if self.hidden_dim is not None:
+            return f"string=\"{self.string}\", hidden_dim={self.hidden_dim}"
+        else:
+            return f"string=\"{self.string}\""
+
 def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
     ConvNd = getattr(_nn, f"Conv{dim}d")
     InstanceNormCls = globals()[f"InstanceNorm{dim}d"]
