@@ -200,6 +200,12 @@ class SampleUnshuffle(FxFunction):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, _attr="sample_unshuffle", **kwargs)
 
+class ChannelNorm(_nn.LayerNorm):
+    def forward(self, x):
+        x = x.transpose(1,-1)
+        x = super().forward(x)
+        x = x.transpose(1,-1)
+        return x
 
 class Norm(FxFunction): ...
 class Center(FxFunction): ...
@@ -491,15 +497,21 @@ class Sequential(_nn.Sequential):
         return x
         
 class Affine(_nn.Module):
-    def __init__(self, channels):
+    def __init__(self, shape):
         super().__init__()
-        self.channels = channels
-        self.weight = _nn.parameter.Parameter(_torch.randn(channels))
-        self.bias = _nn.parameter.Parameter(_torch.randn(channels))
+        self.shape = shape
+        self.weight = _nn.parameter.Parameter(_torch.randn(shape))
+        self.bias = _nn.parameter.Parameter(_torch.randn(shape))
 
     def forward(self, x):
-        w = self.weight.view(self.channels, *[1 for _ in range(x.dim()-2)])
-        b = self.bias.view(self.channels, *[1 for _ in range(x.dim()-2)])
+        if isinstance(self.shape, int):
+            w = self.weight.view(self.channels, *[1 for _ in range(x.dim()-2)])
+            b = self.bias.view(self.channels, *[1 for _ in range(x.dim()-2)])
+        elif isinstance(self.shape, (tuple, list)):
+            w = self.weight
+            b = self.bias
+        else:
+            assert False, "invalid shape"
         return x * w + b
 
 class Trainer(_nn.Module):
@@ -1249,13 +1261,17 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
             if d == "[":
                 e = config[idx+1:].index("]")
                 v = config[idx+2:idx+1+e]
-                if "," in v:
+                if "x" in v:
+                    o = i * int(v[1:])
+                elif "/" in v:
+                    o = i // int(v[1:])
+                elif "," in v:
                     i,o = [int(vv) for vv in v.split(",")]
                 else:
                     o = int(v)
                 idx = idx + 1 + e
 
-        if c == "[":
+        if idx == 0 and c == "[":
             e = config[idx:].index("]")
             v = config[idx+1:idx+e]
             i = o = int(v)
@@ -1276,6 +1292,10 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
         elif c == "l":
             s[-1].append(ConvNd(i, o, 1, dtype=dtype, bias=False))
             i = o
+        elif c == "Q":
+            s[-1].append(ChannelNorm(i, elementwise_affine=True)),
+        elif c == "q":
+            s[-1].append(ChannelNorm(i, elementwise_affine=False)),
         elif c == "B":
             s[-1].append(BatchNormCls(i, dtype=dtype))
         elif c == "b":
@@ -1290,6 +1310,10 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
         elif c == "n":
             s[-1].append(GroupNorm(o, i, dtype=dtype, affine=False))
             o = i
+        elif c == "U":
+            s[-1].append(_nn.GLU(dim=1))
+            o = i//2
+            i = o
         elif c == "E":
             assert dtype not in {_torch.cfloat, _torch.cdouble}
             s[-1].append(_nn.ELU())
