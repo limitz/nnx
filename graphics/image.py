@@ -21,7 +21,10 @@ def rgb(image, dtype=_torch.float, **kwargs):
     #    image = _Fx.tensor(image)
     assert dtype in {_torch.float, _torch.uint8}
     if image.dtype in {_torch.cfloat, _torch.cdouble}:
-        image = _torch.cat([image.real, image.imag], -3)
+        # feature_to_rgb takes the complex tensor as-is — it sums the channel
+        # axis without any per-channel polar rotation (which would distort the
+        # already-encoded phase), and uses ``rotations`` as a per-pixel phase
+        # multiplier instead.
         image = _color.feature_to_rgb(image, **kwargs)
     if image.shape[-3] == 1:
         image = _torch.cat([image]*3, -3)

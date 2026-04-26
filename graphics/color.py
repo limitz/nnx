@@ -42,16 +42,28 @@ def yuv_to_rgb(yuv, clamp=True, **kwargs):
     return rgb.clamp(0,1) if clamp else rgb
 
 def feature_to_yuv(v, norm="std_mean", scale=None, rotations=1, **kwargs):
-    c = v.shape[-3]
     scale = scale or 0.6
-    # rotations span [0, pi) rather than [0, 2pi) because real-valued channels
-    # already cover both signs: a rotation of pi is equivalent to negating the
-    # channel, so spanning 2pi makes channel i value -x indistinguishable from
-    # channel (i + c/2) value +x.
-    z = _torch.polar(
-        _torch.ones(c),
-        _torch.arange(c, dtype=_torch.float) * (rotations * _math.pi / c))
-    v = (v * z.to(v.device).view(-1,1,1)).sum(-3)
+    if v.is_complex():
+        # Complex tensors already encode phase per-pixel — applying the per-
+        # channel polar rotation that the real path uses would corrupt that
+        # information, so skip it entirely. Channels are summed without any
+        # rotation. ``rotations`` becomes a per-pixel phase multiplier:
+        # ``(z**r) / (|z|**(r-1) + eps)`` keeps the magnitude and scales the
+        # angle by ``r``. r==1 is a no-op.
+        if rotations != 1:
+            eps = 1e-8
+            v = (v ** rotations) / (v.abs() ** (rotations - 1) + eps)
+        v = v.sum(-3)
+    else:
+        c = v.shape[-3]
+        # rotations span [0, pi) rather than [0, 2pi) because real-valued channels
+        # already cover both signs: a rotation of pi is equivalent to negating the
+        # channel, so spanning 2pi makes channel i value -x indistinguishable from
+        # channel (i + c/2) value +x.
+        z = _torch.polar(
+            _torch.ones(c),
+            _torch.arange(c, dtype=_torch.float) * (rotations * _math.pi / c))
+        v = (v * z.to(v.device).view(-1,1,1)).sum(-3)
     if norm == "center":
         v = v.div(v.std().add(1e-8))/2
     elif norm == "std_mean":
