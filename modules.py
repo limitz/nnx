@@ -1219,6 +1219,37 @@ class CausalNorm1d(_nn.Module):
 
 
 
+class ChannelPool(_nn.Module):
+    """Adaptive average pool along the channel axis (dim=1).
+
+    Reduces ``(B, C_in, *spatial)`` to ``(B, out_channels, *spatial)`` by
+    treating the channel axis as a 1D length and applying
+    ``F.adaptive_avg_pool1d``.
+    """
+
+    def __init__(self, out_channels: int):
+        super().__init__()
+        self.out_channels = int(out_channels)
+
+    def forward(self, x):
+        if x.dim() < 2:
+            raise ValueError(f"ChannelPool needs ≥2 dims, got {x.dim()}")
+        # Move channel to the end → flatten everything else as the batch →
+        # add a singleton "channel" so adaptive_avg_pool1d treats the original
+        # channel axis as the length-to-pool.
+        c_in = x.size(1)
+        y = x.movedim(1, -1)                       # (B, ..., C_in)
+        spatial = y.shape[:-1]
+        flat = y.reshape(-1, 1, c_in)              # (N, 1, C_in)
+        flat = _F.adaptive_avg_pool1d(flat, self.out_channels)  # (N, 1, C_out)
+        flat = flat.squeeze(1)                     # (N, C_out)
+        y = flat.view(*spatial, self.out_channels)
+        return y.movedim(-1, 1)
+
+    def extra_repr(self):
+        return f"out_channels={self.out_channels}"
+
+
 class Parse2d(_nn.Sequential):
     def __init__(self, string, hidden_dim=None, kernel_size=3):
         self.string = string
@@ -1270,7 +1301,7 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
     for idx in range(len(config)):
         c = config[idx]
         d = config[idx+1] if idx < len(config)-1 else None
-        if c in { "C", "c", "L", "l" , "N", "n"}:
+        if c in { "C", "c", "L", "l" , "N", "n", "P"}:
             if d == "[":
                 e = config[idx+1:].index("]")
                 v = config[idx+2:idx+1+e]
@@ -1323,6 +1354,9 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
         elif c == "n":
             s[-1].append(GroupNorm(o, i, dtype=dtype, affine=False))
             o = i
+        elif c == "P":
+            s[-1].append(ChannelPool(o))
+            i = o
         elif c == "U":
             s[-1].append(_nn.GLU(dim=1))
             o = i//2
