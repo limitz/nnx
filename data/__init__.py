@@ -23,6 +23,38 @@ class DatasetProxyWithIndex(_torch.utils.data.Dataset):
         else:
             return r, idx
 
+class DatasetProxyWithMetadata(_torch.utils.data.Dataset):
+    def __init__(self, dataset, metadata):
+        self.dataset = dataset
+        self.metadata = metadata
+    
+    def __len__(self):
+        return len(self.dataset)
+        
+    def __getitem__(self, idx):
+        r = self.dataset[idx]
+        if callable(self.metadata): m = self.metadata(idx, r)
+        else: m = self.metadata
+            
+        if isinstance(r, (list, tuple)):
+            return (*r, m)
+        else:
+            return r, m
+
+class DatasetProxyWithCollate(_torch.utils.data.Dataset):
+    def __init__(self, dataset, collate):
+        self.dataset = dataset
+        self.collate = collate
+    
+    def __len__(self):
+        return len(self.dataset)
+        
+    def __getitem__(self, idx):
+        r = self.dataset[idx]
+        return self.collate(idx, r)
+        
+        
+
 class ImageDataset(_torch.utils.data.Dataset):
     def __init__(self, pattern, target_types=None, transform=None):
         assert _Fx.all_in_set(target_types, {"index", "path"}) 
