@@ -1129,6 +1129,152 @@ class GroupNorm(_nn.Module):
         return r
 
 
+class BlendedRunningGroupNorm2d(_nn.Module):
+    """Per-channel norm that blends live spatial stats with slowly-evolving running stats.
+
+    Used identically in train and eval modes — no self.training branching.
+
+    For each forward call, computes per-instance per-channel spatial mean/std
+    (live stats), then blends them with a slow exponential moving average:
+
+        mu_blend  = alpha * mu_live  + (1 - alpha) * running_mu
+        sig_blend = alpha * sig_live + (1 - alpha) * running_sigma
+        y = (x - mu_blend) / (sig_blend + eps)
+
+    Running buffers are updated every forward pass (train and eval alike) with
+    the batch-averaged live stats:
+
+        running_mu  <- (1 - beta) * running_mu  + beta * mean_B(mu_live)
+        running_var <- (1 - beta) * running_var + beta * mean_B(var_live)
+
+    Limit cases:
+    - blend_alpha=1  →  standard InstanceNorm (no running stats used)
+    - blend_alpha=0, decay_beta→0  →  fully slow multiplier (Berlin–Kac-like)
+    - blend_alpha in (0,1)  →  partial slowing of the spatial constraint
+
+    DSL token: ``K[alpha,beta]``  (e.g. ``K[0.5,0.05]``).
+    If brackets are omitted, defaults are alpha=0.5, beta=0.05.
+    """
+
+    def __init__(self, channels: int, blend_alpha: float = 0.5,
+                 decay_beta: float = 0.05, eps: float = 1e-5,
+                 affine: bool = True, dtype=None):
+        super().__init__()
+        if dtype is None:
+            dtype = _torch.float
+        self.channels = channels
+        self.alpha = float(blend_alpha)
+        self.beta = float(decay_beta)
+        self.eps = eps
+        self.dtype = dtype
+        self.register_buffer("running_mu",  _torch.zeros(channels, dtype=dtype))
+        self.register_buffer("running_var", _torch.ones(channels,  dtype=dtype))
+        self.register_buffer("initialized", _torch.tensor(False))
+        if affine:
+            self.weight = _nn.Parameter(_torch.ones(channels,  dtype=dtype))
+            self.bias   = _nn.Parameter(_torch.zeros(channels, dtype=dtype))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias",   None)
+
+    def forward(self, x: _torch.Tensor) -> _torch.Tensor:  # x: (B, C, H, W)
+        # Per-instance per-channel live spatial stats
+        mu_live  = x.mean(dim=(2, 3))                     # (B, C)
+        var_live = x.var(dim=(2, 3), unbiased=False)       # (B, C)
+        sig_live = var_live.sqrt()
+
+        # Batch-averaged live stats for the running-buffer update (detached)
+        mu_batch  = mu_live.detach().mean(0)               # (C,)
+        var_batch = var_live.detach().mean(0)              # (C,)
+
+        if not self.initialized:
+            self.running_mu.copy_(mu_batch)
+            self.running_var.copy_(var_batch)
+            self.initialized.fill_(True)
+
+        # Blended normalisation statistics — per-instance live + broadcast running
+        run_sig = self.running_var.sqrt()
+        mu_blend  = self.alpha * mu_live  + (1.0 - self.alpha) * self.running_mu[None, :]   # (B,C)
+        sig_blend = self.alpha * sig_live + (1.0 - self.alpha) * run_sig[None, :]            # (B,C)
+
+        y = (x - mu_blend[:, :, None, None]) / (sig_blend[:, :, None, None] + self.eps)
+
+        if self.weight is not None:
+            y = y * self.weight[None, :, None, None] + self.bias[None, :, None, None]
+
+        # Update running buffers AFTER computing y so the next step sees a
+        # marginally updated stat. No self.training gate: same in train and eval.
+        with _torch.no_grad():
+            self.running_mu.mul_(1.0 - self.beta).add_(self.beta * mu_batch)
+            self.running_var.mul_(1.0 - self.beta).add_(self.beta * var_batch)
+
+        return y
+
+    def extra_repr(self) -> str:
+        return (f"{self.channels}, alpha={self.alpha}, beta={self.beta}, "
+                f"eps={self.eps}")
+
+
+class DampenedGroupNorm2d(_nn.Module):
+    """Per-channel spatial GroupNorm (num_groups=C) with dampened mean/std subtraction.
+
+    Standard InstanceNorm projects out the spatial zero-mode every step, which
+    enforces the Berlin-Kac spherical constraint.  This module lets you dial that
+    projection continuously:
+
+        y = (x - gamma_mean * mu) / (sigma^gamma_std + eps)
+
+    where mu, sigma are the standard per-instance per-channel spatial mean / std.
+
+    gamma_mean = 1, gamma_std = 1  →  standard IN (spherical regime, eta ~ 0.04)
+    gamma_mean = 0, gamma_std = 1  →  no mean subtraction (ferromagnetic accessible)
+    gamma_mean = 1, gamma_std = 0  →  no scale normalization (likely unstable)
+
+    Affine weight/bias (learnable) are applied after dampening, matching the
+    N token in the body DSL.
+    """
+
+    def __init__(self, num_channels: int, gamma_mean: float = 1.0,
+                 gamma_std: float = 1.0, eps: float = 1e-5,
+                 affine: bool = True, device=None, dtype=_torch.float):
+        super().__init__()
+        if dtype is None:
+            dtype = _torch.float
+        self.num_channels = num_channels
+        self.gamma_mean = float(gamma_mean)
+        self.gamma_std = float(gamma_std)
+        self.eps = eps
+        self.affine = affine
+        self.dtype = dtype
+
+        if affine:
+            self.weight = _nn.Parameter(_torch.ones(num_channels, dtype=dtype, device=device))
+            self.bias = _nn.Parameter(_torch.zeros(num_channels, dtype=dtype, device=device))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+    def forward(self, x: _torch.Tensor) -> _torch.Tensor:  # x: (B, C, H, W)
+        assert x.shape[1] == self.num_channels, (
+            f"DampenedGroupNorm2d: expected {self.num_channels} channels, got {x.shape[1]}")
+        mu = x.mean(dim=(2, 3), keepdim=True)          # per-instance per-channel spatial mean
+        var = x.var(dim=(2, 3), unbiased=False, keepdim=True)
+        sigma = (var + self.eps).sqrt()
+        # Dampened denominator: sigma^gamma_std + eps.
+        # When gamma_std=1 → sigma + eps (standard).
+        # When gamma_std=0 → 1 + eps ≈ 1 (no scale norm).
+        denom = sigma.pow(self.gamma_std) + self.eps
+        out = (x - self.gamma_mean * mu) / denom
+        if self.affine:
+            view = [1, self.num_channels] + [1] * (x.dim() - 2)
+            out = out * self.weight.view(view) + self.bias.view(view)
+        return out
+
+    def extra_repr(self) -> str:
+        return (f"{self.num_channels}, gamma_mean={self.gamma_mean}, "
+                f"gamma_std={self.gamma_std}, eps={self.eps}, affine={self.affine}")
+
+
 class Between:
     def __init__(self, a, b, n=(), inclusive=True):
         self.a = a
@@ -1298,9 +1444,50 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
     s = [[]]
     i = o = hidden_dim
     dtype = _torch.float
+    # Dampened-IN default params (used when 'D' token has no brackets)
+    _d_gamma_mean = 1.0
+    _d_gamma_std = 1.0
+    # Tracking index for bracket skipping.  Python for-loops don't allow
+    # mutating idx to skip characters, so we track a skip counter instead.
+    _skip_until = -1
     for idx in range(len(config)):
+        if idx <= _skip_until:
+            continue
         c = config[idx]
         d = config[idx+1] if idx < len(config)-1 else None
+
+        # --- D token: DampenedGroupNorm2d[gm,gs] ---
+        # Parse float bracket args before the shared bracket handler below,
+        # because the shared handler always tries int conversion.
+        if c == "D":
+            gm, gs = 1.0, 1.0
+            if d == "[":
+                e = config[idx+1:].index("]")
+                v = config[idx+2:idx+1+e]
+                parts = v.split(",")
+                gm = float(parts[0]) if len(parts) >= 1 else 1.0
+                gs = float(parts[1]) if len(parts) >= 2 else 1.0
+                _skip_until = idx + 1 + e  # skip '[', content, ']'
+            s[-1].append(DampenedGroupNorm2d(i, gamma_mean=gm, gamma_std=gs,
+                                             affine=True, dtype=dtype))
+            continue
+
+        # --- K token: BlendedRunningGroupNorm2d[alpha,beta] ---
+        # Same float-bracket parsing as D. Defaults: alpha=0.5, beta=0.05.
+        if c == "K":
+            ka, kb = 0.5, 0.05
+            if d == "[":
+                e = config[idx+1:].index("]")
+                v = config[idx+2:idx+1+e]
+                parts = v.split(",")
+                ka = float(parts[0]) if len(parts) >= 1 else 0.5
+                kb = float(parts[1]) if len(parts) >= 2 else 0.05
+                _skip_until = idx + 1 + e
+            s[-1].append(BlendedRunningGroupNorm2d(i, blend_alpha=ka,
+                                                   decay_beta=kb,
+                                                   affine=True, dtype=dtype))
+            continue
+
         if c in { "C", "c", "L", "l" , "N", "n", "P"}:
             if d == "[":
                 e = config[idx+1:].index("]")
