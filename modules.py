@@ -1044,6 +1044,172 @@ class InstanceNorm3d(InstanceNormNd):
     _allowed_ranks = (5,)
 
 
+class CrossNormNd(_nn.Module):
+    """Joint cross-input spatial normalization of a pair ``(a, b)`` with a learned
+    per-side weighting of the shared "mean field".
+
+    A single global mean/variance (per batch, per channel) is formed from **both**
+    ``a`` and ``b`` and used to normalize them together. Each side carries a learned,
+    positive scalar-per-channel ``alpha`` (``alpha_a``, ``alpha_b``) that scales how
+    much that side's statistics contribute to the global field before they are pooled.
+    Concretely the field is the alpha-weighted pool (law of total variance):
+
+        wa, wb = alpha_a * Na, alpha_b * Nb                  # effective weights
+        mu     = (wa*mean_a + wb*mean_b) / (wa + wb)
+        var    = (wa*(var_a + |mean_a-mu|^2) + wb*(var_b + |mean_b-mu|^2)) / (wa + wb)
+
+    Both ``a`` and ``b`` are then normalized by this shared ``(mu, var)``, and each side
+    gets its **own** learned affine (``weight_a/bias_a``, ``weight_b/bias_b``). So the
+    statistics are mixed (alpha-weighted), the affine is not. ``alpha`` is parameterized
+    as ``softplus(raw)`` (strictly positive) and initialized to ``1`` — at which point,
+    since ``wa,wb`` reduce to the element counts, the field is exactly the plain
+    concatenated InstanceNorm:
+
+        x = torch.cat((a.flatten(2), b.flatten(2)), -1); xn = (x-x.mean(-1))/sqrt(var+eps)
+
+    ``a`` and ``b`` must agree on batch/channel dims but may differ in spatial shape.
+    Call as ``forward(a, b)`` or ``forward((a, b))``; returns ``(a', b')``. Mirrors
+    :class:`InstanceNormNd` (complex dtype + optional running stats; in eval with
+    ``track_running_stats`` both branches use the shared running stats). Set
+    ``learn_alpha=False`` to recover the plain (count-weighted) joint norm with no
+    alpha parameters.
+    """
+    _allowed_ranks = None
+
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
+                 learn_alpha=True, track_running_stats=False, device=None,
+                 dtype=_torch.float):
+        super().__init__()
+        if dtype is None: dtype = _torch.float
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.learn_alpha = learn_alpha
+        self.track_running_stats = track_running_stats
+        self.dtype = dtype
+        self.is_complex = _is_complex_dtype(dtype)
+        var_dtype = _real_dtype_of(dtype) if self.is_complex else dtype
+
+        if affine:
+            # Separate affine per branch (a and b), each per-channel.
+            self.weight_a = _nn.Parameter(_torch.ones(num_features, dtype=dtype, device=device))
+            self.bias_a = _nn.Parameter(_torch.zeros(num_features, dtype=dtype, device=device))
+            self.weight_b = _nn.Parameter(_torch.ones(num_features, dtype=dtype, device=device))
+            self.bias_b = _nn.Parameter(_torch.zeros(num_features, dtype=dtype, device=device))
+        else:
+            for n in ("weight_a", "bias_a", "weight_b", "bias_b"):
+                self.register_parameter(n, None)
+
+        if learn_alpha:
+            # raw params s.t. softplus(raw) == 1 at init -> recovers plain joint norm.
+            sp_inv_1 = _math.log(_math.expm1(1.0))
+            self.alpha_a_raw = _nn.Parameter(_torch.full((num_features,), sp_inv_1, device=device))
+            self.alpha_b_raw = _nn.Parameter(_torch.full((num_features,), sp_inv_1, device=device))
+        else:
+            self.register_parameter("alpha_a_raw", None)
+            self.register_parameter("alpha_b_raw", None)
+
+        if track_running_stats:
+            self.register_buffer("running_mean", _torch.zeros(num_features, dtype=dtype, device=device))
+            self.register_buffer("running_var", _torch.ones(num_features, dtype=var_dtype, device=device))
+            self.register_buffer("num_batches_tracked",
+                                 _torch.tensor(0, dtype=_torch.long, device=device))
+        else:
+            self.register_buffer("running_mean", None)
+            self.register_buffer("running_var", None)
+            self.register_buffer("num_batches_tracked", None)
+
+    @property
+    def alpha_a(self):
+        """Resolved positive per-channel weight for side a (``softplus(raw)``)."""
+        return _F.softplus(self.alpha_a_raw) if self.learn_alpha else None
+
+    @property
+    def alpha_b(self):
+        return _F.softplus(self.alpha_b_raw) if self.learn_alpha else None
+
+    def forward(self, a, b=None):
+        if b is None:
+            assert isinstance(a, (tuple, list)) and len(a) == 2, \
+                "CrossNorm expects forward(a, b) or forward((a, b))"
+            a, b = a
+        assert a.dim() == b.dim(), \
+            f"a and b must have the same rank, got {a.dim()} and {b.dim()}"
+        if self._allowed_ranks is not None:
+            assert a.dim() in self._allowed_ranks, \
+                f"expected input rank in {self._allowed_ranks}, got {a.dim()}"
+        assert a.shape[0] == b.shape[0] and a.shape[1] == b.shape[1], \
+            f"a and b must share batch/channel dims, got {tuple(a.shape[:2])} vs {tuple(b.shape[:2])}"
+        assert a.shape[1] == self.num_features, \
+            f"expected {self.num_features} channels, got {a.shape[1]}"
+
+        B, C = a.shape[0], a.shape[1]
+        sa, sb = a.shape[2:], b.shape[2:]
+        na_, nb_ = _math.prod(sa), _math.prod(sb)
+        af = a.reshape(B, C, na_)
+        bf = b.reshape(B, C, nb_)
+        view = (1, -1, 1)
+        use_running = (not self.training) and self.track_running_stats
+
+        if use_running:
+            mean_v = self.running_mean.view(view)
+            var_v = self.running_var.view(view)
+        elif self.learn_alpha:
+            # Per-side moments, then alpha-weighted pooling into the shared field.
+            mean_a, var_a, _ = _moments(af, [2], self.is_complex, keepdim=True)
+            mean_b, var_b, _ = _moments(bf, [2], self.is_complex, keepdim=True)
+            wa = _F.softplus(self.alpha_a_raw).view(view) * na_
+            wb = _F.softplus(self.alpha_b_raw).view(view) * nb_
+            wsum = wa + wb
+            mean_v = (wa * mean_a + wb * mean_b) / wsum
+            da, db = mean_a - mean_v, mean_b - mean_v
+            if self.is_complex:
+                ssa = da.real.pow(2) + da.imag.pow(2)
+                ssb = db.real.pow(2) + db.imag.pow(2)
+            else:
+                ssa, ssb = da.pow(2), db.pow(2)
+            var_v = (wa * (var_a + ssa) + wb * (var_b + ssb)) / wsum
+        else:
+            # Plain count-weighted joint norm (== concatenated InstanceNorm).
+            mean_v, var_v, _ = _moments(_torch.cat((af, bf), dim=2), [2],
+                                        self.is_complex, keepdim=True)
+
+        if (not use_running) and self.training and self.track_running_stats:
+            with _torch.no_grad():
+                m = mean_v.reshape(B, C).mean(0).detach()
+                v = var_v.reshape(B, C).mean(0).detach()
+                self.running_mean.mul_(1 - self.momentum).add_(m * self.momentum)
+                self.running_var.mul_(1 - self.momentum).add_(v * self.momentum)
+                self.num_batches_tracked.add_(1)
+
+        inv = (var_v + self.eps).rsqrt()
+        an = (af - mean_v) * inv
+        bn = (bf - mean_v) * inv
+        if self.affine:
+            an = an * self.weight_a.view(view) + self.bias_a.view(view)
+            bn = bn * self.weight_b.view(view) + self.bias_b.view(view)
+        return an.reshape(B, C, *sa), bn.reshape(B, C, *sb)
+
+    def extra_repr(self):
+        r = f"{self.num_features}, eps={self.eps}, momentum={self.momentum}"
+        r += f", affine={self.affine}, learn_alpha={self.learn_alpha}"
+        r += f", track_running_stats={self.track_running_stats}"
+        if self.dtype != _torch.float:
+            r += f", dtype={self.dtype}"
+        return r
+
+
+class CrossNorm1d(CrossNormNd):
+    _allowed_ranks = (3,)
+
+class CrossNorm2d(CrossNormNd):
+    _allowed_ranks = (4,)
+
+class CrossNorm3d(CrossNormNd):
+    _allowed_ranks = (5,)
+
+
 class LayerNorm(_nn.Module):
     def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True,
                  bias=True, device=None, dtype=_torch.float):
