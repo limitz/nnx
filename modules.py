@@ -495,7 +495,38 @@ class Sequential(_nn.Sequential):
             if i == 0: x = layer(*args, **kwargs)
             else: x = layer(x)
         return x
-        
+
+
+class Parallel(_nn.ModuleList):
+    """Run N inputs through N parallel sub-modules and return their outputs as a tuple.
+
+    Holds ``n`` sub-modules; ``forward`` pairs the ``i``-th input with the ``i``-th
+    sub-module (``out[i] = module[i](input[i])``) and returns ``tuple(out)``. Accepts the
+    inputs either as separate args (``forward(a, b)``) or as a single tuple/list
+    (``forward((a, b))``) — mirroring :class:`CrossNormNd`, so the two compose directly
+    inside :class:`Sequential` for multi-stream architectures::
+
+        Sequential(
+            Parallel(convA, convB),   # independent per-stream work
+            CrossNorm2d(c),           # couples the streams (shared alpha-weighted field)
+            Parallel(convA2, convB2),
+        )
+
+    Construct as ``Parallel(m0, m1, ...)`` or ``Parallel([m0, m1, ...])``.
+    """
+    def __init__(self, *modules):
+        if len(modules) == 1 and isinstance(modules[0], (list, tuple)):
+            modules = modules[0]
+        super().__init__(modules)
+
+    def forward(self, *inputs):
+        if len(inputs) == 1 and isinstance(inputs[0], (list, tuple)):
+            inputs = tuple(inputs[0])
+        assert len(inputs) == len(self), \
+            f"Parallel: got {len(inputs)} input(s) for {len(self)} branch(es)"
+        return tuple(module(x) for module, x in zip(self, inputs))
+
+
 class Affine(_nn.Module):
     def __init__(self, shape):
         super().__init__()
