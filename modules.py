@@ -1426,6 +1426,16 @@ class AttnCrossNormNd(_nn.Module):
         var = (_torch.einsum("bij,bcj->bci", alpha, Vv)
                + _torch.einsum("bij,bcji->bci", alpha, diff.pow(2)))   # (B, C, N)
 
+        # opt-in diagnostics (off by default, no cost): stash the pooled stats so a
+        # caller can inspect what blows up. var is a sum of non-negative terms; if a
+        # pooled var_i collapses to ~0 the 1/sqrt(var+eps) below explodes.
+        if getattr(self, "_debug", False):
+            self._dbg = dict(
+                alpha=alpha.detach(), mu=mu.detach(), var=var.detach(),
+                Vv=Vv.detach(), M=M.detach(),
+                var_min=float(var.min()), var_max=float(var.max()),
+                inv_max=float((var + self.eps).rsqrt().max()))
+
         out = []
         for i, xf in enumerate(flats):
             mi = mu[..., i].unsqueeze(-1)
