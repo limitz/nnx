@@ -41,7 +41,12 @@ class StaticConv3d(StaticConvNd):
 class Skip(_nn.Sequential):
     def forward(self,x,r=None):
         r = r if r is not None else x
-        return x + super().forward(r)
+        y = super().forward(r)
+        # Tuple/list input (e.g. wrapping a Parallel/CrossNorm pair): residual is
+        # applied element-wise so (a,b) + (ya,yb) -> (a+ya, b+yb), not concatenation.
+        if isinstance(x, (tuple, list)):
+            return tuple(xi + yi for xi, yi in zip(x, y))
+        return x + y
 
 class Lambda(_nn.Module):
     def __init__(self, function, unsafe=False):
@@ -224,15 +229,20 @@ class IFFT2(FFTFunction): ...
 class IFFTn(FFTFunction): ...
 
 class ForEach(_nn.Sequential):
-    def forward(self, x):
-        s = super()
-        r = [s.forward(v) for v in x]
-        if isinstance(x, _torch.Tensor):
-            if len(r):
-                s = r[0].shape
-                if all(v.shape == s for v in r[1:]):
-                    return _torch.stack(r)
-        return r
+    """Apply the wrapped (weight-shared) sequence to each input stream, returning a tuple.
+
+    Weight-shared analogue of :class:`Parallel`: where ``Parallel`` runs the i-th
+    sub-module on the i-th input, ``ForEach`` runs the *same* wrapped sequence on every
+    input. Accepts the streams as separate args (``forward(a, b)``) or as a single
+    tuple/list (``forward((a, b))``) — like :class:`Parallel`/:class:`CrossNormNd`, so the
+    three compose in a :class:`Sequential`. Does NOT iterate a tensor's leading/batch dim;
+    a lone tensor is treated as a single stream (returns a 1-tuple).
+    """
+    def forward(self, *inputs):
+        if len(inputs) == 1 and isinstance(inputs[0], (tuple, list)):
+            inputs = tuple(inputs[0])
+        fwd = super().forward
+        return tuple(fwd(v) for v in inputs)
 class Tee(_nn.Sequential):
     def forward(self, x):
         super().forward(x)
@@ -501,10 +511,13 @@ class Parallel(_nn.ModuleList):
     """Run N inputs through N parallel sub-modules and return their outputs as a tuple.
 
     Holds ``n`` sub-modules; ``forward`` pairs the ``i``-th input with the ``i``-th
-    sub-module (``out[i] = module[i](input[i])``) and returns ``tuple(out)``. Accepts the
-    inputs either as separate args (``forward(a, b)``) or as a single tuple/list
-    (``forward((a, b))``) — mirroring :class:`CrossNormNd`, so the two compose directly
-    inside :class:`Sequential` for multi-stream architectures::
+    sub-module (``out[i] = module[i](input[i])``) and returns ``tuple(out)``. Inputs may be
+    given as separate args (``forward(a, b)``) or as a single tuple/list
+    (``forward((a, b))``); a **single tensor** is *forked* (broadcast) to every branch,
+    while a tuple/list whose length matches the branch count is *zipped* one-per-branch.
+    This is what lets it sit first in a :class:`Sequential` (fork the incoming stream) and
+    also follow a :class:`CrossNormNd` (zip the returned pair) — mirroring CrossNorm's
+    dual signature so the two compose directly for multi-stream architectures::
 
         Sequential(
             Parallel(convA, convB),   # independent per-stream work
@@ -520,11 +533,34 @@ class Parallel(_nn.ModuleList):
         super().__init__(modules)
 
     def forward(self, *inputs):
-        if len(inputs) == 1 and isinstance(inputs[0], (list, tuple)):
-            inputs = tuple(inputs[0])
-        assert len(inputs) == len(self), \
-            f"Parallel: got {len(inputs)} input(s) for {len(self)} branch(es)"
+        n = len(self)
+        if len(inputs) == 1:
+            x = inputs[0]
+            if isinstance(x, (list, tuple)) and len(x) == n:
+                inputs = tuple(x)          # zip: one input per branch
+            else:
+                inputs = (x,) * n          # fork: broadcast a single input to all branches
+        assert len(inputs) == n, \
+            f"Parallel: got {len(inputs)} input(s) for {n} branch(es)"
         return tuple(module(x) for module, x in zip(self, inputs))
+
+
+class Index(_nn.Module):
+    """Select element ``index`` from a tuple/list (indexable) input.
+
+    Used to collapse a multi-stream :class:`Parallel`/:class:`CrossNormNd` pair back to a
+    single tensor by picking one stream. In the Parse grammar this is the ``[n]`` suffix
+    on a parallel block: ``<...|...>[1]`` parses to ``... , Index(1)``.
+    """
+    def __init__(self, index):
+        super().__init__()
+        self.index = index
+
+    def forward(self, x):
+        return x[self.index]
+
+    def extra_repr(self):
+        return str(self.index)
 
 
 class Affine(_nn.Module):
@@ -1636,10 +1672,18 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
     ConvNd = getattr(_nn, f"Conv{dim}d")
     InstanceNormCls = globals()[f"InstanceNorm{dim}d"]
     BatchNormCls = globals()[f"BatchNorm{dim}d"]
+    CrossNormCls = globals()[f"CrossNorm{dim}d"]
     ks = kernel_size
     pad = (ks - 1) // 2
     s = [[]]
+    par = []        # stack of parallel blocks; each is a list of finalized branch modules
+    par_enter = []  # stack of (i, o) channel counts at each '<' so branches start aligned
+    par_chan = []   # stack of per-branch (i, o) end-channel counts (for '>[n]' indexing)
     i = o = hidden_dim
+
+    def _finalize_branch(seq):
+        if not seq: return _nn.Identity()
+        return seq[0] if len(seq) == 1 else Sequential(*seq)
     dtype = _torch.float
     # Dampened-IN default params (used when 'D' token has no brackets)
     _d_gamma_mean = 1.0
@@ -1764,6 +1808,42 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
             r = s.pop(-1)
             r = Skip(*r)
             s[-1].append(r)
+        elif c == "<":
+            # parallel start: open a new branch block + a fresh sequence for branch 0
+            par.append([])
+            par_enter.append((i, o))
+            par_chan.append([])
+            s.append([])
+        elif c == "|":
+            # next branch: finalize current branch, record its end channels, reset to entry
+            par[-1].append(_finalize_branch(s.pop(-1)))
+            par_chan[-1].append((i, o))
+            i, o = par_enter[-1]
+            s.append([])
+        elif c == ">":
+            # parallel end. One path (no '|') -> ForEach: the shared sequence is mapped
+            # over every input stream. Multiple paths -> Parallel: distinct weights per
+            # stream. (For a single tensor input both yield a 1-tuple; they differ when
+            # fed a multi-stream tuple, e.g. after a 'Y'.)
+            par[-1].append(_finalize_branch(s.pop(-1)))
+            par_chan[-1].append((i, o))
+            branches = par.pop(-1)
+            chans = par_chan.pop(-1)
+            par_enter.pop(-1)
+            s[-1].append(ForEach(*branches) if len(branches) == 1 else Parallel(*branches))
+            if d == "[":
+                # optional '[n]' suffix: select stream n, collapsing back to one tensor
+                e = config[idx+1:].index("]")
+                sel = int(config[idx+2:idx+1+e])
+                s[-1].append(Index(sel))
+                # ForEach streams all share channels (len(chans)==1) -> fall back to chans[-1]
+                i, o = chans[sel] if sel < len(chans) else chans[-1]
+                _skip_until = idx + 1 + e
+            else:
+                # no selector: channels left at a branch's end (all equal under ForEach)
+                i, o = chans[-1]
+        elif c == "Y":
+            s[-1].append(CrossNormCls(i))
     assert len(s) == 1
     return s[-1]
     #if len(s[-1]) == 1: return s[-1][0]
