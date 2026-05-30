@@ -549,8 +549,9 @@ class Index(_nn.Module):
     """Select element ``index`` from a tuple/list (indexable) input.
 
     Used to collapse a multi-stream :class:`Parallel`/:class:`CrossNormNd` pair back to a
-    single tensor by picking one stream. In the Parse grammar this is the ``[n]`` suffix
-    on a parallel block: ``<...|...>[1]`` parses to ``... , Index(1)``.
+    single tensor by picking one stream. In the Parse grammar this is the standalone
+    ``@n`` operator (insertable anywhere a tuple is present): ``<...|...>@1`` parses to
+    ``... , Index(1)``.
     """
     def __init__(self, index):
         super().__init__()
@@ -1678,7 +1679,8 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
     s = [[]]
     par = []        # stack of parallel blocks; each is a list of finalized branch modules
     par_enter = []  # stack of (i, o) channel counts at each '<' so branches start aligned
-    par_chan = []   # stack of per-branch (i, o) end-channel counts (for '>[n]' indexing)
+    par_chan = []   # stack of per-branch (i, o) end-channel counts (consumed by '@n')
+    last_stream_chans = None  # per-stream (i,o) of the current tuple value, for a later '@n'
     i = o = hidden_dim
 
     def _finalize_branch(seq):
@@ -1831,17 +1833,22 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
             chans = par_chan.pop(-1)
             par_enter.pop(-1)
             s[-1].append(ForEach(*branches) if len(branches) == 1 else Parallel(*branches))
-            if d == "[":
-                # optional '[n]' suffix: select stream n, collapsing back to one tensor
-                e = config[idx+1:].index("]")
-                sel = int(config[idx+2:idx+1+e])
-                s[-1].append(Index(sel))
-                # ForEach streams all share channels (len(chans)==1) -> fall back to chans[-1]
-                i, o = chans[sel] if sel < len(chans) else chans[-1]
-                _skip_until = idx + 1 + e
-            else:
-                # no selector: channels left at a branch's end (all equal under ForEach)
-                i, o = chans[-1]
+            # channels left at a branch's end (all equal under ForEach). Remember the
+            # per-stream channels so a later '@n' can restore the selected stream's count.
+            last_stream_chans = chans
+            i, o = chans[-1]
+        elif c == "@":
+            # '@n' selects stream n from a tuple/list value (standalone Index). Can appear
+            # anywhere a tuple is present: after <...>, after a Y, or a tuple-in Skip.
+            j = idx + 1
+            if j < len(config) and config[j] == "-": j += 1
+            while j < len(config) and config[j].isdigit(): j += 1
+            sel = int(config[idx+1:j])
+            s[-1].append(Index(sel))
+            if last_stream_chans is not None and -len(last_stream_chans) <= sel < len(last_stream_chans):
+                i, o = last_stream_chans[sel]
+                last_stream_chans = None
+            _skip_until = j - 1
         elif c == "Y":
             s[-1].append(CrossNormCls(i))
     assert len(s) == 1
