@@ -1366,12 +1366,22 @@ class AttnCrossNormNd(_nn.Module):
         self.affine = affine
         self.track_running_stats = False
         self.dtype = dtype
-        self.scale = self.qk_dim ** -0.5
+        # Cosine attention: q,k are L2-normalized before the dot product so the logits
+        # are bounded in [-1, 1] regardless of the (un-normalized, possibly growing)
+        # stream-mean magnitude. A fixed 1/sqrt(qk_dim) on a raw dot product does NOT
+        # control logit scale when the inputs aren't normalized — `attn ~ ||M||^2` then
+        # overflows for a single high-magnitude batch element (observed nan). The fixed
+        # scale is replaced by a learnable temperature (exp(logit_scale), clamped) so the
+        # softmax can still sharpen toward one-hot but can never blow up. Swin-v2 style.
+        self.logit_scale_max = float(_math.log(100.0))
+        self.logit_scale = _nn.Parameter(
+            _torch.full((), float(_math.log(self.qk_dim ** 0.5)), dtype=dtype, device=device))
 
         self.q_proj = _nn.Linear(num_features, self.qk_dim, device=device, dtype=dtype)
         self.k_proj = _nn.Linear(num_features, self.qk_dim, device=device, dtype=dtype)
         # zero queries at init -> attn == 0 -> uniform alpha -> plain joint norm.
         # keys keep their default init so gradients reach q_proj from step one.
+        # (normalize(0) == 0, so the cosine logits are also 0 at init -> still uniform.)
         _nn.init.zeros_(self.q_proj.weight)
         _nn.init.zeros_(self.q_proj.bias)
 
@@ -1430,7 +1440,8 @@ class AttnCrossNormNd(_nn.Module):
         return tuple(out)
 
     def extra_repr(self):
-        r = f"{self.num_features}, qk_dim={self.qk_dim}, eps={self.eps}, affine={self.affine}"
+        r = (f"{self.num_features}, qk_dim={self.qk_dim}, eps={self.eps}, affine={self.affine}, "
+             f"cosine_attn=True")
         if self.dtype != _torch.float:
             r += f", dtype={self.dtype}"
         return r
