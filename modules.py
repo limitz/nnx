@@ -1377,10 +1377,13 @@ class AttnCrossNormNd(_nn.Module):
 
         self.q_proj = _nn.Linear(num_features, self.qk_dim, device=device, dtype=dtype)
         self.k_proj = _nn.Linear(num_features, self.qk_dim, device=device, dtype=dtype)
-        # zero queries at init -> attn == 0 -> uniform alpha -> plain joint norm.
-        # keys keep their default init so gradients reach q_proj from step one.
-        _nn.init.zeros_(self.q_proj.weight)
-        _nn.init.zeros_(self.q_proj.bias)
+        # Small-normal init on q (weight+bias), like k's default-scale init: small
+        # queries -> small logits -> alpha starts NEAR-uniform (≈ plain joint norm) but
+        # not exactly, so stream symmetry is broken and the q/token_norm path is live
+        # (receives gradient) from step one. Zero-init would make the whole QK path
+        # inert at init.
+        _nn.init.normal_(self.q_proj.weight, mean=0.0, std=0.01)
+        _nn.init.normal_(self.q_proj.bias, mean=0.0, std=0.01)
 
         if affine:
             self.weight = _nn.Parameter(_torch.ones(num_features, dtype=dtype, device=device))
