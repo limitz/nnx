@@ -734,8 +734,43 @@ class DiffMSELoss(_nn.Module):
             
             if self.reduction != "dim":
                 loss = _Fx.reduce(loss, self.reduction, keepdim=self.keepdim)
-            return loss 
-        
+            return loss
+
+class Autodidact(_nn.Module):
+    """Self-taught per-element loss weighting.
+
+    Wraps a pointwise loss ``lfn`` (any criterion exposing a ``reduction`` attr,
+    e.g. ``nn.MSELoss`` / ``nn.BCEWithLogitsLoss``). The wrapped model is expected
+    to emit *two* stacked chunks along ``dim``: the prediction and a confidence map.
+    The confidence is standardised and exponentiated to a positive weight
+    ``w = exp(z(c)) + eps``; the per-element loss is scaled by ``w / w.detach()**2``
+    (denominator clamped to ``maxdiv``). Because the gradient flows only through the
+    numerator, the model learns to up-weight elements it is confident about while the
+    detached denominator keeps the overall loss scale bounded.
+
+    Returns ``(loss, pred, confidence)`` with confidence squashed to (0, 1).
+    """
+    def __init__(self, lfn, dim=1, eps=1e-1, maxdiv=1e+2):
+        super().__init__()
+        assert hasattr(lfn, "reduction"), "lfn must expose a `reduction` attribute"
+        lfn.reduction = "none"
+        self.lfn = lfn
+        self.dim = dim
+        self.eps = eps
+        self.max = maxdiv
+
+    def forward(self, pred, target):
+        pred, confidence = pred.chunk(2, dim=self.dim)
+        confidence = confidence.sub(confidence.mean()).div(confidence.std() + 1e-5)
+        num = confidence.exp().add(self.eps)
+        div = num.detach().pow(2)
+
+        loss = self.lfn(pred, target)
+        assert loss.shape == num.shape, \
+            f"loss shape {tuple(loss.shape)} != confidence shape {tuple(num.shape)}"
+        loss = loss * num / div.clamp_max(self.max)
+        return loss.mean(), pred, confidence.sigmoid()
+
 class Scope(_nn.Sequential):
     def __init__(self, *args, name="global"):
         super().__init__(*args)
