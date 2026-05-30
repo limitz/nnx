@@ -1313,6 +1313,139 @@ class CrossNorm3d(CrossNormNd):
     _allowed_ranks = (5,)
 
 
+class AttnCrossNormNd(_nn.Module):
+    """Attention-pooled cross-stream normalization over a tuple of arbitrary length.
+
+    Generalises :class:`CrossNormNd` from a fixed pair with *static*, learned
+    per-channel mixing (``softplus(alpha)``) to ``N`` streams whose mixing weights
+    are computed *from the data*, transformer-style. Given streams
+    ``(x_0, ..., x_{N-1})`` that share batch/channel dims (spatial shapes may
+    differ), each stream is summarised by its per-channel spatial mean (an
+    ``adaptive_avg_pool`` to size 1). Stacking the N summaries gives ``P`` of shape
+    ``(B, C, N)``; two channel-wise linear maps produce queries and keys::
+
+        q = q_proj(P), k = k_proj(P)               # (B, qk_dim, N)
+        attn[b, i, j] = sum_c q[b,c,i] * k[b,c,j]  # (B, N, N), dest i, source j
+        alpha = softmax(attn / sqrt(qk_dim), dim=-1)    # over the *source* axis
+
+    ``alpha[b, i, j]`` is the weight with which source ``j`` contributes to
+    destination ``i`` (e.g. ``alpha[:, 0, 1]`` weights stream-1's statistics into
+    stream-0's field). The "values" of the attention are the per-stream
+    means/variances and the softmax is the weighted pool (law of total variance
+    for the variance)::
+
+        mu_i  = sum_j alpha[i,j] * mean_j
+        var_i = sum_j alpha[i,j] * (var_j + (mean_j - mu_i)^2)
+
+    Each stream ``x_i`` is then normalised by its own ``(mu_i, var_i)`` and gets a
+    shared per-channel affine. ``q_proj`` is zero-initialised so ``attn == 0`` at
+    init: ``alpha`` is uniform ``1/N`` and the layer starts as a plain
+    equal-weighted joint normalisation (``k_proj`` keeps its default init so
+    gradients flow into ``q_proj`` from the first step).
+
+    Drop-in for :class:`CrossNormNd`: same ``(num_features, eps, ...)`` constructor
+    and the same ``forward(a, b)`` / ``forward((a, b, ...))`` tuple-in/tuple-out
+    contract, but accepts any ``N >= 1``. Real dtypes only; ``track_running_stats``
+    is unsupported (statistics are always per-batch, the pool being
+    input-conditioned). The affine is shared across streams (N-agnostic), unlike
+    CrossNorm's per-side affine.
+    """
+    _allowed_ranks = None
+
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
+                 qk_dim=None, track_running_stats=False, device=None,
+                 dtype=_torch.float):
+        super().__init__()
+        if dtype is None: dtype = _torch.float
+        assert not _is_complex_dtype(dtype), "AttnCrossNorm supports real dtypes only"
+        assert not track_running_stats, "AttnCrossNorm: track_running_stats not supported"
+        self.num_features = num_features
+        self.qk_dim = qk_dim or num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = False
+        self.dtype = dtype
+        self.scale = self.qk_dim ** -0.5
+
+        self.q_proj = _nn.Linear(num_features, self.qk_dim, device=device, dtype=dtype)
+        self.k_proj = _nn.Linear(num_features, self.qk_dim, device=device, dtype=dtype)
+        # zero queries at init -> attn == 0 -> uniform alpha -> plain joint norm.
+        # keys keep their default init so gradients reach q_proj from step one.
+        _nn.init.zeros_(self.q_proj.weight)
+        _nn.init.zeros_(self.q_proj.bias)
+
+        if affine:
+            self.weight = _nn.Parameter(_torch.ones(num_features, dtype=dtype, device=device))
+            self.bias = _nn.Parameter(_torch.zeros(num_features, dtype=dtype, device=device))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+    def forward(self, *inputs):
+        if len(inputs) == 1 and isinstance(inputs[0], (tuple, list)):
+            inputs = tuple(inputs[0])
+        assert len(inputs) >= 1, "AttnCrossNorm expects at least one stream"
+        x0 = inputs[0]
+        B, C = x0.shape[0], x0.shape[1]
+        assert C == self.num_features, f"expected {self.num_features} channels, got {C}"
+        for x in inputs:
+            assert x.shape[0] == B and x.shape[1] == C, \
+                "all streams must share batch/channel dims"
+            if self._allowed_ranks is not None:
+                assert x.dim() in self._allowed_ranks, \
+                    f"expected input rank in {self._allowed_ranks}, got {x.dim()}"
+
+        # per-stream per-channel moments over the spatial dims -> (B, C) each
+        means, varis, flats, spatials = [], [], [], []
+        for x in inputs:
+            xf = x.reshape(B, C, -1)
+            means.append(xf.mean(2))
+            varis.append(xf.var(2, unbiased=False))
+            flats.append(xf)
+            spatials.append(x.shape[2:])
+
+        M = _torch.stack(means, dim=-1)          # (B, C, N)  == adaptive_avg_pool(1)
+        Vv = _torch.stack(varis, dim=-1)         # (B, C, N)
+
+        # transformer-style attention over the stream axis (channels contracted)
+        q = self.q_proj(M.transpose(1, 2)).transpose(1, 2)   # (B, qk, N)
+        k = self.k_proj(M.transpose(1, 2)).transpose(1, 2)   # (B, qk, N)
+        attn = _torch.einsum("bci,bcj->bij", q, k) * self.scale   # (B, N, N) [dest, src]
+        alpha = attn.softmax(dim=-1)                          # weighted pool over source j
+
+        mu = _torch.einsum("bij,bcj->bci", alpha, M)         # (B, C, N) per-dest mean
+        diff = M.unsqueeze(-1) - mu.unsqueeze(-2)            # (B, C, j, i)
+        var = (_torch.einsum("bij,bcj->bci", alpha, Vv)
+               + _torch.einsum("bij,bcji->bci", alpha, diff.pow(2)))   # (B, C, N)
+
+        out = []
+        for i, xf in enumerate(flats):
+            mi = mu[..., i].unsqueeze(-1)
+            inv = (var[..., i].unsqueeze(-1) + self.eps).rsqrt()
+            xn = (xf - mi) * inv
+            if self.affine:
+                xn = xn * self.weight.view(1, -1, 1) + self.bias.view(1, -1, 1)
+            out.append(xn.reshape(B, C, *spatials[i]))
+        return tuple(out)
+
+    def extra_repr(self):
+        r = f"{self.num_features}, qk_dim={self.qk_dim}, eps={self.eps}, affine={self.affine}"
+        if self.dtype != _torch.float:
+            r += f", dtype={self.dtype}"
+        return r
+
+
+class AttnCrossNorm1d(AttnCrossNormNd):
+    _allowed_ranks = (3,)
+
+class AttnCrossNorm2d(AttnCrossNormNd):
+    _allowed_ranks = (4,)
+
+class AttnCrossNorm3d(AttnCrossNormNd):
+    _allowed_ranks = (5,)
+
+
 class LayerNorm(_nn.Module):
     def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True,
                  bias=True, device=None, dtype=_torch.float):
@@ -1709,6 +1842,7 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
     InstanceNormCls = globals()[f"InstanceNorm{dim}d"]
     BatchNormCls = globals()[f"BatchNorm{dim}d"]
     CrossNormCls = globals()[f"CrossNorm{dim}d"]
+    AttnCrossNormCls = globals()[f"AttnCrossNorm{dim}d"]
     ks = kernel_size
     pad = (ks - 1) // 2
     s = [[]]
