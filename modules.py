@@ -2020,6 +2020,8 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
             _skip_until = j - 1
         elif c == "Y":
             s[-1].append(CrossNormCls(i))
+        elif c == "X":
+            s[-1].append(AttnCrossNormCls(i))
     assert len(s) == 1
     return s[-1]
     #if len(s[-1]) == 1: return s[-1][0]
