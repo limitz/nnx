@@ -1313,7 +1313,7 @@ class CrossNorm3d(CrossNormNd):
     _allowed_ranks = (5,)
 
 
-class AttnCrossNormNd(_nn.Module):
+class SACrossNormNd(_nn.Module):
     """Attention-pooled cross-stream normalization over a tuple of arbitrary length.
 
     Generalises :class:`CrossNormNd` from a fixed pair with *static*, learned
@@ -1357,8 +1357,8 @@ class AttnCrossNormNd(_nn.Module):
                  dtype=_torch.float):
         super().__init__()
         if dtype is None: dtype = _torch.float
-        assert not _is_complex_dtype(dtype), "AttnCrossNorm supports real dtypes only"
-        assert not track_running_stats, "AttnCrossNorm: track_running_stats not supported"
+        assert not _is_complex_dtype(dtype), "SACrossNorm supports real dtypes only"
+        assert not track_running_stats, "SACrossNorm: track_running_stats not supported"
         self.num_features = num_features
         self.qk_dim = qk_dim or num_features
         self.eps = eps
@@ -1395,7 +1395,7 @@ class AttnCrossNormNd(_nn.Module):
     def forward(self, *inputs):
         if len(inputs) == 1 and isinstance(inputs[0], (tuple, list)):
             inputs = tuple(inputs[0])
-        assert len(inputs) >= 1, "AttnCrossNorm expects at least one stream"
+        assert len(inputs) >= 1, "SACrossNorm expects at least one stream"
         x0 = inputs[0]
         B, C = x0.shape[0], x0.shape[1]
         assert C == self.num_features, f"expected {self.num_features} channels, got {C}"
@@ -1449,13 +1449,13 @@ class AttnCrossNormNd(_nn.Module):
         return r
 
 
-class AttnCrossNorm1d(AttnCrossNormNd):
+class SACrossNorm1d(SACrossNormNd):
     _allowed_ranks = (3,)
 
-class AttnCrossNorm2d(AttnCrossNormNd):
+class SACrossNorm2d(SACrossNormNd):
     _allowed_ranks = (4,)
 
-class AttnCrossNorm3d(AttnCrossNormNd):
+class SACrossNorm3d(SACrossNormNd):
     _allowed_ranks = (5,)
 
 
@@ -1855,7 +1855,7 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
     InstanceNormCls = globals()[f"InstanceNorm{dim}d"]
     BatchNormCls = globals()[f"BatchNorm{dim}d"]
     CrossNormCls = globals()[f"CrossNorm{dim}d"]
-    AttnCrossNormCls = globals()[f"AttnCrossNorm{dim}d"]
+    SACrossNormCls = globals()[f"SACrossNorm{dim}d"]
     ks = kernel_size
     pad = (ks - 1) // 2
     s = [[]]
@@ -2034,7 +2034,7 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
         elif c == "Y":
             s[-1].append(CrossNormCls(i))
         elif c == "X":
-            s[-1].append(AttnCrossNormCls(i))
+            s[-1].append(SACrossNormCls(i))
     assert len(s) == 1
     return s[-1]
     #if len(s[-1]) == 1: return s[-1][0]
