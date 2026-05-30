@@ -1415,9 +1415,12 @@ class AttnCrossNormNd(_nn.Module):
         M = _torch.stack(means, dim=-1)          # (B, C, N)  == adaptive_avg_pool(1)
         Vv = _torch.stack(varis, dim=-1)         # (B, C, N)
 
-        # transformer-style attention over the stream axis (channels contracted)
-        q = self.q_proj(M.transpose(1, 2)).transpose(1, 2)   # (B, qk, N)
-        k = self.k_proj(M.transpose(1, 2)).transpose(1, 2)   # (B, qk, N)
+        # transformer-style attention over the stream axis (channels contracted).
+        # LayerNorm the tokens (channel axis, per stream) BEFORE projecting so the dot
+        # product logits stay O(1) and 1/sqrt(qk_dim) is valid regardless of ||M||.
+        Mt = self.token_norm(M.transpose(1, 2))              # (B, N, C) normed over C
+        q = self.q_proj(Mt).transpose(1, 2)                  # (B, qk, N)
+        k = self.k_proj(Mt).transpose(1, 2)                  # (B, qk, N)
         attn = _torch.einsum("bci,bcj->bij", q, k) * self.scale   # (B, N, N) [dest, src]
         alpha = attn.softmax(dim=-1)                          # weighted pool over source j
 
