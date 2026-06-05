@@ -450,6 +450,79 @@ class AdaptiveLocalNormNd(_nn.Module):
         x = x[...,rr:-rr,rr:-rr]
         return x
         
+class AdaptiveGuidedFilter(_nn.Module):
+    """Guided filter (He, Sun & Tang 2013) with per-pixel, decoder-predicted window
+    size *and* regularization epsilon.
+
+    A small decoder reads the guide and emits, per pixel, ``dims`` box-window widths
+    (mapped into ``radius``) and one ``eps`` (mapped log-uniformly into ``eps_range``).
+    The guided-filter coefficients
+
+        a = cov(I,p) / (var(I) + eps);  b = mean(p) - a*mean(I);  q = mean(a)*I + mean(b)
+
+    are then computed with :class:`AdaptiveBoxBlurNd` (per-pixel box mean) in place of the
+    fixed box mean used by :func:`nnx.functional.guided_filter`. This is the
+    :class:`AdaptiveLocalNormNd` decoder->adaptive-blur pattern applied to edge-aware
+    filtering. Guide channels are filtered independently (separable per-channel guided
+    filter), matching the fixed functional version.
+
+    forward(x, guide=None) -> filtered x; ``guide`` defaults to ``x`` (self-guided)."""
+
+    def __init__(self, guide_dim, hidden_dim=None, dims=2, radius=(3,31),
+                 eps_range=(1e-4, 1e-1), nonlinearity=_nn.GELU, mlp_expand=1,
+                 padding_mode="replicate"):
+        super().__init__()
+        assert dims in (1, 2, 3)
+        # A width-1 hidden layer makes the following LayerNorm emit 0 for every pixel
+        # (LayerNorm over a single feature), collapsing the per-pixel params to constants;
+        # guard a useful minimum so a 1-channel guide still yields spatial variation.
+        hidden_dim = hidden_dim or max(16, guide_dim)
+        self.dims = dims
+        self.padding_mode = padding_mode
+        self.register_buffer("radius", _Fx.tensor(radius, dtype=_torch.float32))
+        lo, hi = eps_range
+        self.register_buffer("log_eps", _torch.log(_Fx.tensor([lo, hi], dtype=_torch.float32)))
+        self.blur = AdaptiveBoxBlurNd(channel_dim=1)
+        self.decode = _nn.Sequential(
+            MoveDim(1,-1),
+            _nn.Linear(guide_dim, hidden_dim*mlp_expand),
+            _nn.LayerNorm(hidden_dim*mlp_expand),
+            nonlinearity(),
+            _nn.Linear(hidden_dim*mlp_expand, dims+1),
+            _nn.Sigmoid())
+
+    def _decode_params(self, guide):
+        # guide: [B, C, *spatial] -> (kernel sizes [B,*spatial,dims] channels-last for the
+        # blur, eps [B,1,*spatial] channels-first to broadcast over the blurred maps).
+        klo, khi = self.radius
+        elo, ehi = self.log_eps
+        params = self.decode(guide)                              # [B,*spatial,dims+1]
+        ks = params[..., :self.dims] * (khi - klo) + klo
+        eps = (elo + params[..., self.dims:] * (ehi - elo)).exp()
+        return ks, eps.movedim(-1, 1)
+
+    def forward(self, x, guide=None):
+        if guide is None: guide = x
+        rr = int(self.radius[1])//2 + 1
+        pad = (rr,) * (2*self.dims)
+        I = _F.pad(guide, pad, mode=self.padding_mode)
+        p = _F.pad(x, pad, mode=self.padding_mode)
+
+        ks, eps = self._decode_params(I)
+        self.blur.update_kernel_sizes(ks)
+        blur = self.blur
+        mean_I = blur(I)
+        mean_p = blur(p)
+        var_I = blur(I*I) - mean_I*mean_I
+        cov_Ip = blur(I*p) - mean_I*mean_p
+        a = cov_Ip / (var_I + eps)
+        b = mean_p - a*mean_I
+        q = blur(a)*I + blur(b)
+
+        crop = (slice(None), slice(None)) + (slice(rr, -rr),) * self.dims
+        return q[crop]
+
+
 class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
     def __init__(self, num_classes, adapt="weight", betas=(0.9, 0.999, 0.999),  *args, **kwargs):
         super().__init__(*args, **kwargs)
