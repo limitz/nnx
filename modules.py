@@ -543,30 +543,33 @@ class AdaptiveCrossEntropyLoss(_nn.CrossEntropyLoss):
     def forward(self, pred, target):
         if _torch.is_grad_enabled():
             with _torch.no_grad():
-                correct = pred.argmax(1) == target
                 n = self.num_classes
-                
+
+                # mask out ignored / out-of-range targets before gathering stats
+                valid = (target >= 0) & (target < n)
+                if self.ignore_index is not None:
+                    valid = valid & (target != self.ignore_index)
+                safe = target.where(valid, _torch.zeros_like(target))
+
                 # update the scores
-                total = _torch.bincount(target.view(-1), minlength=n)
-                #correct = _torch.bincount(target[correct], minlength=n)
-                correct = pred.softmax(1) * _Fx.one_hot(target,n,dim=1)
+                total = _torch.bincount(safe[valid].view(-1), minlength=n)
+                # summed softmax mass placed on the true class, per class
+                onehot = _Fx.one_hot(safe, n, dim=1) * valid.unsqueeze(1)
+                correct = pred.softmax(1) * onehot
                 correct = correct.transpose(0,1).flatten(1).sum(1)
                 classes = total.nonzero().view(-1)
-                scores = self.scores.mul(self.betas[0])
-                scores = scores + (correct/total).mul(1-self.betas[0])
-                scores = scores[classes]
-                self.scores[classes] = scores
-                total = self.counts.mul(self.betas[0]) + total.mul(1-self.betas[0])
-                self.counts.copy_(total)
+                self.scores[classes] = self.scores[classes].mul(self.betas[0]) \
+                    + (correct[classes] / total[classes]).mul(1-self.betas[0])
+                self.counts.copy_(self.counts.mul(self.betas[0]) + total.mul(1-self.betas[0]))
 
                 w = self.scores if self.adapt == "score" else self.counts
-                
+
                 #update the weights
                 weight = (w.sum() / (self.num_classes * w)) / self.num_classes
-                weight = self.weight.log() * self.betas[1] + weight.log() * (1-self.betas[2])
+                weight = self.weight.log() * self.betas[1] + weight.log() * (1-self.betas[1])
                 weight = weight.exp()
                 self.weight.copy_(weight)
-            
+
         return super().forward(pred, target)
 
 class Sequential(_nn.Sequential):
