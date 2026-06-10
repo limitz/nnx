@@ -26,8 +26,30 @@ def unshear(matrix):
         value[...,0,1] = matrix[...,1,0] * y / x * -1
         value[...,1,1] = matrix[...,0,0] * y / x
         return _torch.where(mask, value, matrix)
+    elif matrix.shape[-1] == 4:
+        # 3D analog of the 2x2 case above. Orthogonalize the upper-left 3x3 linear
+        # block so its columns are mutually perpendicular while keeping each column's
+        # original length -> removes shear, preserves per-axis (anisotropic) scale.
+        # col0 is kept; col1 is Gram-Schmidt'd off col0; col2 is FORCED to e0 x e1
+        # (the 3D analog of the +90 deg flip the 2x2 case applies to col1). The frame
+        # is therefore always right-handed: det -> n0*n1*n2 > 0 unconditionally, so it
+        # cannot collapse from columns drifting parallel under depth composition.
+        # Translation column and homogeneous row are left untouched.
+        eps = 1e-12
+        c0, c1, c2 = matrix[..., :3, :3].unbind(-1)             # each (...,3)
+        n0 = c0.norm(dim=-1, keepdim=True)
+        n1 = c1.norm(dim=-1, keepdim=True)
+        n2 = c2.norm(dim=-1, keepdim=True)
+        e0 = c0 / n0.clamp_min(eps)
+        u1 = c1 - (c1 * e0).sum(-1, keepdim=True) * e0
+        e1 = u1 / u1.norm(dim=-1, keepdim=True).clamp_min(eps)
+        e2 = _torch.linalg.cross(e0, e1, dim=-1)               # unit, right-handed
+        block = _torch.stack([e0 * n0, e1 * n1, e2 * n2], -1)  # (...,3,3) columns
+        out = matrix.clone()
+        out[..., :3, :3] = block
+        return out
     else:
-        assert False, "currently only 3x3 matrices are supported"
+        assert False, "currently only 3x3 and 4x4 matrices are supported"
         
 def perspective_grid(theta, size, homogenous=False):
     n,c,h,w = size
