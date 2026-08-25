@@ -146,6 +146,35 @@ class To(TensorFunction): ...
 class Detach(TensorFunction): ...
 class Log(TensorFunction): ...
 class Exp(TensorFunction): ...
+
+class ExpHardCap(_nn.Module):
+    """min(exp(x), cap): exp with a hard upper bound (input clamped at log cap)."""
+    def __init__(self, cap=6.0):
+        super().__init__()
+        self.cap = cap
+        self.log_cap = _math.log(cap)
+
+    def forward(self, x):
+        return x.clamp(max=self.log_cap).exp()
+
+    def extra_repr(self):
+        return f"cap={self.cap}"
+
+
+class ExpSoftCap(_nn.Module):
+    """exp(softmin(x, log cap)) with knee sharpness tau (tau=1 sigmoid cap, tau->inf hard cap)."""
+    def __init__(self, cap=6.0, tau=1.0):
+        super().__init__()
+        self.cap = cap
+        self.tau = tau
+        self.log_cap = _math.log(cap)
+
+    def forward(self, x):
+        return (self.log_cap - _F.softplus(self.tau * (self.log_cap - x)) / self.tau).exp()
+
+    def extra_repr(self):
+        return f"cap={self.cap}, tau={self.tau}"
+
 class Pow(TensorFunction): ...
 class Sqrt(TensorFunction): ...
 class Squeeze(TensorFunction): ...
@@ -1989,6 +2018,18 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
                                                    affine=True, dtype=dtype))
             continue
 
+        # --- h / s tokens: ExpHardCap[cap] / ExpSoftCap[cap], default cap 6 ---
+        if c in {"h", "s"}:
+            cap, tau = 6.0, 1.0
+            if d == "[":
+                e = config[idx+1:].index("]")
+                parts = config[idx+2:idx+1+e].split(",")
+                cap = float(parts[0])
+                if len(parts) >= 2: tau = float(parts[1])
+                _skip_until = idx + 1 + e
+            s[-1].append(ExpHardCap(cap) if c == "h" else ExpSoftCap(cap, tau))
+            continue
+
         if c in { "C", "c", "L", "l" , "N", "n", "P"}:
             if d == "[":
                 e = config[idx+1:].index("]")
@@ -2052,6 +2093,8 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
         elif c == "E":
             assert dtype not in {_torch.cfloat, _torch.cdouble}
             s[-1].append(_nn.ELU())
+        elif c == "e":
+            s[-1].append(Exp())
         elif c == "R":
             assert dtype not in {_torch.cfloat, _torch.cdouble}
             s[-1].append(_nn.ReLU())
