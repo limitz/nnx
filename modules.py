@@ -1885,6 +1885,13 @@ class CausalNorm1d(_nn.Module):
 
 
 
+class Cubic(_nn.Module):
+    """Gross-Pitaevskii interaction term |psi|^2 psi; equivariant under a global phase, so U(1) survives it."""
+
+    def forward(self, x):
+        return x * x.abs().pow(2)
+
+
 class ChannelPool(_nn.Module):
     """Adaptive average pool along the channel axis (dim=1).
 
@@ -2105,6 +2112,8 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
             s[-1].append(_nn.Sigmoid())
         elif c == "T":
             s[-1].append(_nn.Tanh())
+        elif c == "V":
+            s[-1].append(Cubic())
         elif c == "(":
             s.append([])
         elif c == ")":
