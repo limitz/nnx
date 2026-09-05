@@ -1885,6 +1885,36 @@ class CausalNorm1d(_nn.Module):
 
 
 
+class ScaledTanh(_nn.Module):
+    """Saturating cap k*tanh(x/k); k=1 is a plain tanh, larger k saturates later."""
+
+    def __init__(self, k=1.0):
+        super().__init__()
+        self.k = float(k)
+
+    def forward(self, x):
+        return self.k * _torch.tanh(x / self.k)
+
+    def extra_repr(self):
+        return f"k={self.k}"
+
+
+class EnergyConserving(_nn.Module):
+    """Runs the wrapped ops, then rescales the output to the energy of its own input (mean over channels,
+    summed over space). For complex states the energy is |x|^2."""
+
+    def __init__(self, *ops):
+        super().__init__()
+        self.inner = ops[0] if len(ops) == 1 else Sequential(*ops)
+
+    def forward(self, x):
+        dims = tuple(range(2, x.dim()))
+        e_in = x.abs().pow(2).mean(1, keepdim=True).sum(dims, keepdim=True).clamp(min=1e-12)
+        y = self.inner(x)
+        e_y = y.abs().pow(2).mean(1, keepdim=True).sum(dims, keepdim=True).clamp(min=1e-12)
+        return y * (e_in / e_y).sqrt()
+
+
 class Cubic(_nn.Module):
     """Gross-Pitaevskii interaction term |psi|^2 psi; equivariant under a global phase, so U(1) survives it."""
 
@@ -2111,7 +2141,15 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
         elif c == "S":
             s[-1].append(_nn.Sigmoid())
         elif c == "T":
-            s[-1].append(_nn.Tanh())
+            if d == "[":
+                e = config[idx+1:].index("]")
+                v = config[idx+2:idx+1+e]
+                s[-1].append(ScaledTanh(float(v[1:]) if v.startswith("x") else float(v)))
+                _skip_until = idx + 1 + e
+            else:
+                s[-1].append(_nn.Tanh())
+        elif c == "=":
+            s[-1] = [EnergyConserving(*s[-1])] if s[-1] else []
         elif c == "V":
             s[-1].append(Cubic())
         elif c == "(":
