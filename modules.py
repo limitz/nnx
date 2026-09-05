@@ -1916,10 +1916,18 @@ class EnergyConserving(_nn.Module):
 
 
 class Cubic(_nn.Module):
-    """Gross-Pitaevskii interaction term |psi|^2 psi; equivariant under a global phase, so U(1) survives it."""
+    """Gross-Pitaevskii interaction term s*|psi|^2 psi; equivariant under a global phase, so U(1) survives it.
+    s=+1 focusing (collapses in 2D), s=-1 defocusing (supports vortices and a Bogoliubov spectrum)."""
+
+    def __init__(self, sign=1.0):
+        super().__init__()
+        self.sign = float(sign)
 
     def forward(self, x):
-        return x * x.abs().pow(2)
+        return self.sign * x * x.abs().pow(2)
+
+    def extra_repr(self):
+        return f"sign={self.sign:+g}"
 
 
 class ChannelPool(_nn.Module):
@@ -2151,7 +2159,9 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
         elif c == "=":
             s[-1] = [EnergyConserving(*s[-1])] if s[-1] else []
         elif c == "V":
-            s[-1].append(Cubic())
+            s[-1].append(Cubic(+1.0))
+        elif c == "v":
+            s[-1].append(Cubic(-1.0))
         elif c == "(":
             s.append([])
         elif c == ")":
