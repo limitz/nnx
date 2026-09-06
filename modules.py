@@ -1899,6 +1899,22 @@ class ScaledTanh(_nn.Module):
         return f"k={self.k}"
 
 
+class MagnitudeTanh(_nn.Module):
+    """Saturating cap on the modulus: k*tanh(|z|/k) * z/|z|. Unlike a componentwise tanh this commutes with a
+    global phase, so U(1) survives it. Real inputs reduce to k*tanh(|x|/k)*sign(x) = k*tanh(x/k)."""
+
+    def __init__(self, k=1.0, eps=1e-12):
+        super().__init__()
+        self.k = float(k); self.eps = float(eps)
+
+    def forward(self, x):
+        r = x.abs()
+        return x * (self.k * _torch.tanh(r / self.k) / r.clamp_min(self.eps))
+
+    def extra_repr(self):
+        return f"k={self.k}"
+
+
 class EnergyConserving(_nn.Module):
     """Runs the wrapped ops, then rescales the output to the energy of its own input (mean over channels,
     summed over space). For complex states the energy is |x|^2."""
@@ -2158,6 +2174,14 @@ def _parse_block(config, hidden_dim=None, dim=2, kernel_size=3):
                 s[-1].append(_nn.Tanh())
         elif c == "=":
             s[-1] = [EnergyConserving(*s[-1])] if s[-1] else []
+        elif c == "M":
+            if d == "[":
+                e = config[idx+1:].index("]")
+                v = config[idx+2:idx+1+e]
+                s[-1].append(MagnitudeTanh(float(v[1:]) if v.startswith("x") else float(v)))
+                _skip_until = idx + 1 + e
+            else:
+                s[-1].append(MagnitudeTanh())
         elif c == "V":
             s[-1].append(Cubic(+1.0))
         elif c == "v":
